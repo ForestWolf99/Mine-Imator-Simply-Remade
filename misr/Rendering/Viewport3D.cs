@@ -962,16 +962,27 @@ void main()
         var moveScale = 0.01f; // Sensitivity factor
         var worldMovement = Vector3.Zero;
 
+        // Calculate camera vectors for proper movement direction (future-proof for camera roll)
+        var cameraForward = Vector3.Normalize(_cameraTarget - _cameraPosition);
+        var cameraRight = Vector3.Normalize(Vector3.Cross(cameraForward, Vector3.UnitY));
+        var cameraUp = Vector3.Normalize(Vector3.Cross(cameraRight, cameraForward));
+
         switch (_draggedAxis)
         {
-            case 0: // X axis
-                worldMovement = Vector3.UnitX * mouseDelta.X * moveScale;
+            case 0: // X axis - move along world X, but direction depends on camera view
+                // If camera is looking from behind, invert the X movement
+                var xDirection = Vector3.Dot(cameraRight, Vector3.UnitX) >= 0 ? 1.0f : -1.0f;
+                worldMovement = Vector3.UnitX * mouseDelta.X * moveScale * xDirection;
                 break;
-            case 1: // Y axis  
-                worldMovement = Vector3.UnitY * -mouseDelta.Y * moveScale; // Invert Y for screen coordinates
+            case 1: // Y axis - move along world Y, but direction depends on camera orientation
+                // Use camera up to determine if we should invert Y movement (for future camera roll support)
+                var yDirection = Vector3.Dot(cameraUp, Vector3.UnitY) >= 0 ? -1.0f : 1.0f; // Negative because screen Y is inverted
+                worldMovement = Vector3.UnitY * mouseDelta.Y * moveScale * yDirection;
                 break;
-            case 2: // Z axis
-                worldMovement = Vector3.UnitZ * -mouseDelta.X * moveScale; // Use X movement for Z axis
+            case 2: // Z axis - move along world Z, but direction depends on camera view
+                // Use camera forward to determine if we should invert Z movement
+                var zDirection = Vector3.Dot(cameraForward, Vector3.UnitZ) >= 0 ? -1.0f : 1.0f;
+                worldMovement = Vector3.UnitZ * -mouseDelta.X * moveScale * zDirection;
                 break;
         }
 
