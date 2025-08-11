@@ -44,6 +44,9 @@ class Program
     {
         if (_window == null) return;
 
+        // Enable Y-flip for all image loading globally
+        StbImage.stbi_set_flip_vertically_on_load(1);
+
         // Set window icon
         SetWindowIcon();
 

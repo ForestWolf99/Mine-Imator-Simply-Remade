@@ -8,12 +8,10 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="898e41cb-63c6-4d46-9ea9-2fa708ccb2d4" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/.idea.misr/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/.idea.misr/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/imgui.ini" beforeDir="false" afterPath="$PROJECT_DIR$/imgui.ini" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/misr/Core/Program.cs" beforeDir="false" afterPath="$PROJECT_DIR$/misr/Core/Program.cs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/misr/Core/SimpleUIRenderer.cs" beforeDir="false" afterPath="$PROJECT_DIR$/misr/Core/SimpleUIRenderer.cs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/misr/UI/PropertiesPanel.cs" beforeDir="false" afterPath="$PROJECT_DIR$/misr/UI/PropertiesPanel.cs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/misr/UI/Timeline.cs" beforeDir="false" afterPath="$PROJECT_DIR$/misr/UI/Timeline.cs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/misr/misr.csproj" beforeDir="false" afterPath="$PROJECT_DIR$/misr/misr.csproj" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

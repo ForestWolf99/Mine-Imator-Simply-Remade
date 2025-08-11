@@ -1,6 +1,12 @@
 using ImGuiNET;
 using System.Numerics;
+using System.Reflection;
 using Misr.Core;
+using Silk.NET.OpenGL;
+using StbImageSharp;
+using Svg;
+using System.Drawing;
+using System.Drawing.Imaging;
 
 namespace Misr.UI;
 
@@ -18,11 +24,21 @@ public class Timeline : IDisposable
     
     // Animation framerate (frames per second)
     public float FrameRate { get; set; } = 30.0f;
-    private float _frameTimer = 0.0f;
+    
+    // Store position when animation starts playing
+    private int _playStartFrame = 0;
+    private float _playStartFrameFloat = 0.0f;
     
     // Store scrubber position for playhead synchronization and 3D viewport
     private Vector2 _scrubberPosition = Vector2.Zero;
     private float _scrubberWidth = 0.0f;
+    
+    // Icon textures for buttons
+    private GL? _gl;
+    private uint _playIconTexture = 0;
+    private uint _pauseIconTexture = 0;
+    private uint _stopIconTexture = 0;
+    private uint _resetIconTexture = 0;
     
     // Reference to scene objects and selected object
     public List<SceneObject>? SceneObjects { get; set; }
@@ -47,9 +63,11 @@ public class Timeline : IDisposable
     // Track previous object index to detect changes
     private int _previousSelectedObjectIndex = -1;
     
-    public Timeline()
+    public Timeline(GL gl)
     {
+        _gl = gl;
         CalculateTotalFrames();
+        LoadIconTextures();
     }
     
     public void Update(float deltaTime)
@@ -163,24 +181,31 @@ public class Timeline : IDisposable
         ImGui.SameLine();
         ImGui.Spacing();
         ImGui.SameLine();
-        if (ImGui.Button(IsPlaying ? "⏸ Pause" : "▶ Play"))
+        if (ImGui.ImageButton("resetButton", (nint)_resetIconTexture, new Vector2(16, 16)))
         {
+            CurrentFrame = 0;
+            CurrentFrameFloat = 0.0f;
+        }
+        
+        ImGui.SameLine();
+        var iconTexture = IsPlaying ? _pauseIconTexture : _playIconTexture;
+        if (ImGui.ImageButton("playPauseButton", (nint)iconTexture, new Vector2(16, 16)))
+        {
+            if (!IsPlaying)
+            {
+                // Store current position when starting to play
+                _playStartFrame = CurrentFrame;
+                _playStartFrameFloat = CurrentFrameFloat;
+            }
             IsPlaying = !IsPlaying;
         }
         
         ImGui.SameLine();
-        if (ImGui.Button("⏹ Stop"))
+        if (ImGui.ImageButton("stopButton", (nint)_stopIconTexture, new Vector2(16, 16)))
         {
             IsPlaying = false;
-            CurrentFrame = 0;
-            CurrentFrameFloat = 0.0f;
-        }
-        
-        ImGui.SameLine();
-        if (ImGui.Button("⏮ Reset"))
-        {
-            CurrentFrame = 0;
-            CurrentFrameFloat = 0.0f;
+            CurrentFrame = _playStartFrame;
+            CurrentFrameFloat = _playStartFrameFloat;
         }
         
         ImGui.Spacing();
@@ -981,8 +1006,120 @@ public class Timeline : IDisposable
         }
     }
 
+    private unsafe void LoadIconTextures()
+    {
+        if (_gl == null) return;
+        
+        // Load icons from embedded SVG resources
+        _playIconTexture = LoadIconFromResource("play.svg") ?? 0;
+        _pauseIconTexture = LoadIconFromResource("pause.svg") ?? 0;
+        _stopIconTexture = LoadIconFromResource("stop.svg") ?? 0;
+        _resetIconTexture = LoadIconFromResource("chevron-double-left.svg") ?? 0;
+    }
+    
+    private unsafe uint? LoadIconFromResource(string iconFileName)
+    {
+        if (_gl == null) return null;
+        
+        try
+        {
+            var assembly = Assembly.GetExecutingAssembly();
+            using var stream = assembly.GetManifestResourceStream($"misr.assets.icons.{iconFileName}");
+            
+            if (stream == null) return null;
+            
+            byte[] imageData;
+            
+            if (iconFileName.EndsWith(".svg"))
+            {
+                // Convert SVG to PNG bytes
+                imageData = ConvertSvgToPngBytes(stream);
+                if (imageData == null) return null;
+                
+                // Load the PNG data with StbImageSharp
+                var imageResult = ImageResult.FromMemory(imageData, ColorComponents.RedGreenBlueAlpha);
+                return CreateTextureFromImageResult(imageResult);
+            }
+            else
+            {
+                // Direct PNG/image loading
+                var imageResult = ImageResult.FromStream(stream, ColorComponents.RedGreenBlueAlpha);
+                return CreateTextureFromImageResult(imageResult);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to load icon {iconFileName}: {ex.Message}");
+            return null;
+        }
+    }
+    
+    private byte[]? ConvertSvgToPngBytes(Stream svgStream)
+    {
+        try
+        {
+            // Load SVG document
+            var svgDocument = SvgDocument.Open<SvgDocument>(svgStream);
+            
+            // Set size to 16x16 for icons
+            svgDocument.Width = 16;
+            svgDocument.Height = 16;
+            
+            // Create bitmap and render SVG to it with white color
+            using var bitmap = new Bitmap(16, 16);
+            using var graphics = Graphics.FromImage(bitmap);
+            
+            // Clear background to transparent
+            graphics.Clear(Color.Transparent);
+            
+            // Set the current color to white for SVG rendering
+            // This affects elements with fill="currentColor"
+            svgDocument.Fill = new SvgColourServer(Color.White);
+            
+            // Render the SVG
+            svgDocument.Draw(graphics);
+            
+            // Convert bitmap to PNG bytes
+            using var memoryStream = new MemoryStream();
+            bitmap.Save(memoryStream, ImageFormat.Png);
+            return memoryStream.ToArray();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to convert SVG to PNG: {ex.Message}");
+            return null;
+        }
+    }
+    
+    private unsafe uint CreateTextureFromImageResult(ImageResult imageResult)
+    {
+        var texture = _gl!.GenTexture();
+        _gl.BindTexture(TextureTarget.Texture2D, texture);
+        
+        fixed (byte* dataPtr = imageResult.Data)
+        {
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba, (uint)imageResult.Width, (uint)imageResult.Height, 0, Silk.NET.OpenGL.PixelFormat.Rgba, PixelType.UnsignedByte, dataPtr);
+        }
+        
+        _gl.TexParameterI(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Linear);
+        _gl.TexParameterI(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Linear);
+        _gl.TexParameterI(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
+        _gl.TexParameterI(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
+        
+        _gl.BindTexture(TextureTarget.Texture2D, 0);
+        return texture;
+    }
+    
+
+
     public void Dispose()
     {
-        // No resources to dispose currently
+        if (_gl != null)
+        {
+            if (_playIconTexture != 0) _gl.DeleteTexture(_playIconTexture);
+            if (_pauseIconTexture != 0) _gl.DeleteTexture(_pauseIconTexture);
+            if (_stopIconTexture != 0) _gl.DeleteTexture(_stopIconTexture);
+            if (_resetIconTexture != 0) _gl.DeleteTexture(_resetIconTexture);
+        }
     }
 }

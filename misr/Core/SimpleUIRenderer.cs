@@ -3,7 +3,6 @@ using Silk.NET.Windowing;
 using Silk.NET.Input;
 using ImGuiNET;
 using System.Numerics;
-using System.Runtime.InteropServices;
 using StbImageSharp;
 using System.Reflection;
 using Misr.UI;
@@ -91,7 +90,7 @@ public class SimpleUIRenderer : IDisposable
             _inputContext = _window.CreateInput();
             _textureAtlas = new TextureAtlas(_gl);
             _viewport3D = new Viewport3D(_gl, _textureAtlas);
-            _timeline = new Timeline();
+            _timeline = new Timeline(_gl);
             _propertiesPanel = new PropertiesPanel();
             _sceneTreePanel = new SceneTreePanel();
             _propertiesPanel.SetViewport3D(_viewport3D);
@@ -548,24 +547,12 @@ public class SimpleUIRenderer : IDisposable
 
         // Create a regular window that acts like a modal dialog
         var windowSize = _window.Size;
-        float dialogWidth = 280;
-        float dialogHeight = 120;
         
         // Position the dialog at the mouse position where X was pressed
         var dialogPos = _deleteDialogPosition;
         
-        // Adjust position to keep dialog fully on screen
-        if (dialogPos.X + dialogWidth > windowSize.X)
-            dialogPos.X = windowSize.X - dialogWidth - 10;
-        if (dialogPos.Y + dialogHeight > windowSize.Y)
-            dialogPos.Y = windowSize.Y - dialogHeight - 10;
-        if (dialogPos.X < 10)
-            dialogPos.X = 10;
-        if (dialogPos.Y < 10)
-            dialogPos.Y = 10;
-            
+        // Don't set fixed size - let ImGui auto-resize to fit content
         ImGui.SetNextWindowPos(dialogPos);
-        ImGui.SetNextWindowSize(new Vector2(dialogWidth, dialogHeight));
         
         // Create a fullscreen overlay first to make it modal-like
         ImGui.SetNextWindowPos(Vector2.Zero);
@@ -584,10 +571,9 @@ public class SimpleUIRenderer : IDisposable
         
         // Now create the actual dialog on top of the overlay
         ImGui.SetNextWindowPos(dialogPos);
-        ImGui.SetNextWindowSize(new Vector2(dialogWidth, dialogHeight));
         
         // Make it modal-like with no close button and always on top
-        var flags = ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove | 
+        var flags = ImGuiWindowFlags.NoMove | 
                    ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoTitleBar |
                    ImGuiWindowFlags.AlwaysAutoResize;
                    
@@ -596,6 +582,23 @@ public class SimpleUIRenderer : IDisposable
         
         if (ImGui.Begin("##DeleteConfirmation", flags))
         {
+            // Adjust position to keep auto-sized dialog fully on screen
+            var currentDialogSize = ImGui.GetWindowSize();
+            var currentDialogPos = ImGui.GetWindowPos();
+            
+            var adjustedPos = currentDialogPos;
+            if (currentDialogPos.X + currentDialogSize.X > windowSize.X)
+                adjustedPos.X = windowSize.X - currentDialogSize.X - 10;
+            if (currentDialogPos.Y + currentDialogSize.Y > windowSize.Y)
+                adjustedPos.Y = windowSize.Y - currentDialogSize.Y - 10;
+            if (adjustedPos.X < 10)
+                adjustedPos.X = 10;
+            if (adjustedPos.Y < 10)
+                adjustedPos.Y = 10;
+            
+            if (adjustedPos.X != currentDialogPos.X || adjustedPos.Y != currentDialogPos.Y)
+                ImGui.SetWindowPos(adjustedPos);
+            
             var selectedObject = _selectedObjectIndex >= 0 && _selectedObjectIndex < _sceneObjects.Count 
                 ? _sceneObjects[_selectedObjectIndex] 
                 : null;
