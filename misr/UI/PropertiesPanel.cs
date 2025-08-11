@@ -16,7 +16,7 @@ public class PropertiesPanel : IDisposable
         SelectedObjectIndex >= 0 && SelectedObjectIndex < SceneObjects.Count 
             ? SceneObjects[SelectedObjectIndex] 
             : null;
-    private Vector3 _lastObjectPosition = Vector3.Zero;
+
     
     // Legacy properties for backwards compatibility - these will delegate to SelectedObject
     public Vector3 ObjectPosition 

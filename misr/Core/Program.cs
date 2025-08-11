@@ -47,7 +47,7 @@ class Program
         // Set window icon
         SetWindowIcon();
 
-        _renderer = new SimpleUIRenderer(null, _window);
+        _renderer = new SimpleUIRenderer(_window);
         _renderer.Initialize();
 
         Console.WriteLine("OpenGL and renderer initialized successfully!");

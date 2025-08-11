@@ -11,8 +11,10 @@ public class Timeline : IDisposable
     public int TimelineStart { get; set; } = 0; // Starting frame of visible timeline
     public int TotalFrames { get; set; } = 2000; // Total frames in the animation - calculated dynamically
     public int CurrentFrame { get; set; } = 0;
+    public float CurrentFrameFloat { get; private set; } = 0.0f;
     public bool IsPlaying { get; set; } = false;
     public bool IsScrubbing { get; private set; } = false;
+    public bool IsHovered { get; private set; } = false;
     
     // Animation framerate (frames per second)
     public float FrameRate { get; set; } = 30.0f;
@@ -26,11 +28,24 @@ public class Timeline : IDisposable
     public List<SceneObject>? SceneObjects { get; set; }
     public int SelectedObjectIndex { get; set; } = -1;
     
+    // Keyframe selection state
+    public class SelectedKeyframe
+    {
+        public string Property { get; set; } = "";
+        public int Frame { get; set; } = -1;
+        public int ObjectIndex { get; set; } = -1;
+    }
+    
+    public SelectedKeyframe? SelectedKeyframeInfo { get; private set; } = null;
+    
     // Current selected object helper
     public SceneObject? CurrentObject => 
         SceneObjects != null && SelectedObjectIndex >= 0 && SelectedObjectIndex < SceneObjects.Count 
             ? SceneObjects[SelectedObjectIndex] 
             : null;
+    
+    // Track previous object index to detect changes
+    private int _previousSelectedObjectIndex = -1;
     
     public Timeline()
     {
@@ -39,18 +54,25 @@ public class Timeline : IDisposable
     
     public void Update(float deltaTime)
     {
+        // Clear keyframe selection if object changed
+        if (_previousSelectedObjectIndex != SelectedObjectIndex)
+        {
+            SelectedKeyframeInfo = null;
+            _previousSelectedObjectIndex = SelectedObjectIndex;
+        }
+        
         // Update animation at specified frame rate
         if (IsPlaying)
         {
-            _frameTimer += deltaTime;
-            float frameInterval = 1.0f / FrameRate;
+            // Smoothly advance fractional frame
+            CurrentFrameFloat += FrameRate * deltaTime;
             
-            while (_frameTimer >= frameInterval)
-            {
-                _frameTimer -= frameInterval;
-                CurrentFrame++;
-                if (CurrentFrame > TotalFrames) CurrentFrame = 0;
-            }
+            // Wrap around if we exceed total frames
+            if (CurrentFrameFloat > TotalFrames) 
+                CurrentFrameFloat = 0.0f;
+            
+            // Update integer frame for UI display
+            CurrentFrame = (int)CurrentFrameFloat;
         }
     }
     
@@ -63,6 +85,7 @@ public class Timeline : IDisposable
         
         if (ImGui.Begin("Timeline", ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.AlwaysVerticalScrollbar))
         {
+            IsHovered = ImGui.IsWindowHovered(ImGuiHoveredFlags.ChildWindows);
             HandleTimelineZoom();
             
             // Calculate visible frame range
@@ -71,6 +94,10 @@ public class Timeline : IDisposable
             
             RenderTimelineControls(visibleFrames, timelineEnd);
             RenderTimelineContent(windowSize, visibleFrames);
+        }
+        else
+        {
+            IsHovered = false;
         }
         ImGui.End();
         ImGui.PopStyleColor();
@@ -146,12 +173,14 @@ public class Timeline : IDisposable
         {
             IsPlaying = false;
             CurrentFrame = 0;
+            CurrentFrameFloat = 0.0f;
         }
         
         ImGui.SameLine();
         if (ImGui.Button("⏮ Reset"))
         {
             CurrentFrame = 0;
+            CurrentFrameFloat = 0.0f;
         }
         
         ImGui.Spacing();
@@ -306,32 +335,30 @@ public class Timeline : IDisposable
         
         // Timeline tracks - only show tracks with keyframes
         if (CurrentObject?.PosXKeyframes.Count > 0)
-            RenderTimelineTrack(CurrentObject.PosXKeyframes.Keys.ToList(), visibleFrames, trackWidth);
+            RenderTimelineTrack(CurrentObject.PosXKeyframes.Keys.ToList(), "position.x", visibleFrames, trackWidth);
         if (CurrentObject?.PosYKeyframes.Count > 0)
-            RenderTimelineTrack(CurrentObject.PosYKeyframes.Keys.ToList(), visibleFrames, trackWidth);
+            RenderTimelineTrack(CurrentObject.PosYKeyframes.Keys.ToList(), "position.y", visibleFrames, trackWidth);
         if (CurrentObject?.PosZKeyframes.Count > 0)
-            RenderTimelineTrack(CurrentObject.PosZKeyframes.Keys.ToList(), visibleFrames, trackWidth);
+            RenderTimelineTrack(CurrentObject.PosZKeyframes.Keys.ToList(), "position.z", visibleFrames, trackWidth);
         if (CurrentObject?.RotXKeyframes.Count > 0)
-            RenderTimelineTrack(CurrentObject.RotXKeyframes.Keys.ToList(), visibleFrames, trackWidth);
+            RenderTimelineTrack(CurrentObject.RotXKeyframes.Keys.ToList(), "rotation.x", visibleFrames, trackWidth);
         if (CurrentObject?.RotYKeyframes.Count > 0)
-            RenderTimelineTrack(CurrentObject.RotYKeyframes.Keys.ToList(), visibleFrames, trackWidth);
+            RenderTimelineTrack(CurrentObject.RotYKeyframes.Keys.ToList(), "rotation.y", visibleFrames, trackWidth);
         if (CurrentObject?.RotZKeyframes.Count > 0)
-            RenderTimelineTrack(CurrentObject.RotZKeyframes.Keys.ToList(), visibleFrames, trackWidth);
+            RenderTimelineTrack(CurrentObject.RotZKeyframes.Keys.ToList(), "rotation.z", visibleFrames, trackWidth);
         if (CurrentObject?.ScaleXKeyframes.Count > 0)
-            RenderTimelineTrack(CurrentObject.ScaleXKeyframes.Keys.ToList(), visibleFrames, trackWidth);
+            RenderTimelineTrack(CurrentObject.ScaleXKeyframes.Keys.ToList(), "scale.x", visibleFrames, trackWidth);
         if (CurrentObject?.ScaleYKeyframes.Count > 0)
-            RenderTimelineTrack(CurrentObject.ScaleYKeyframes.Keys.ToList(), visibleFrames, trackWidth);
+            RenderTimelineTrack(CurrentObject.ScaleYKeyframes.Keys.ToList(), "scale.y", visibleFrames, trackWidth);
         if (CurrentObject?.ScaleZKeyframes.Count > 0)
-            RenderTimelineTrack(CurrentObject.ScaleZKeyframes.Keys.ToList(), visibleFrames, trackWidth);
+            RenderTimelineTrack(CurrentObject.ScaleZKeyframes.Keys.ToList(), "scale.z", visibleFrames, trackWidth);
         
         ImGui.EndChild();
         ImGui.PopStyleVar(2); // Pop WindowPadding and ItemSpacing
         ImGui.PopStyleColor();
     }
-    
 
-    
-    private void RenderTimelineTrack(List<int> keyframeFrames, int visibleFrames, float trackWidth)
+    private void RenderTimelineTrack(List<int> keyframeFrames, string property, int visibleFrames, float trackWidth)
     {
         var drawList = ImGui.GetWindowDrawList();
         var barSize = new Vector2(-1, 18);
@@ -344,6 +371,9 @@ public class Timeline : IDisposable
         var trackRect = ImGui.GetItemRectMin();
         var trackSize = ImGui.GetItemRectSize();
         
+        // Check for mouse interaction on this track
+        bool isTrackHovered = ImGui.IsItemHovered();
+        
         // Draw keyframe markers only if they're in the visible range
         foreach (var frame in keyframeFrames)
         {
@@ -354,9 +384,44 @@ public class Timeline : IDisposable
             float markerX = trackRect.X + (normalizedPos * trackSize.X);
             float markerY = trackRect.Y + (trackSize.Y * 0.5f);
             
-            // Draw keyframe marker
-            var color = 0xFF00FFFF; // Yellow color
-            drawList.AddCircleFilled(new Vector2(markerX, markerY), 4.0f, color);
+            // Check if this keyframe is selected
+            bool isSelected = SelectedKeyframeInfo != null && 
+                              SelectedKeyframeInfo.Property == property && 
+                              SelectedKeyframeInfo.Frame == frame && 
+                              SelectedKeyframeInfo.ObjectIndex == SelectedObjectIndex;
+            
+            // Check if mouse is over this keyframe
+            var mousePos = ImGui.GetMousePos();
+            float distance = Vector2.Distance(mousePos, new Vector2(markerX, markerY));
+            bool isHovered = distance <= 6.0f && isTrackHovered;
+            
+            // Handle keyframe selection
+            if (isHovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+            {
+                SelectedKeyframeInfo = new SelectedKeyframe
+                {
+                    Property = property,
+                    Frame = frame,
+                    ObjectIndex = SelectedObjectIndex
+                };
+            }
+            
+            // Draw keyframe marker with appropriate color
+            uint color;
+            if (isSelected)
+                color = 0xFF00FF00; // Green for selected
+            else if (isHovered)
+                color = 0xFFFFFFFF; // White for hovered
+            else
+                color = 0xFF00FFFF; // Yellow for normal
+            
+            drawList.AddCircleFilled(new Vector2(markerX, markerY), isSelected ? 5.0f : 4.0f, color);
+            
+            // Add outline for selected keyframes
+            if (isSelected)
+            {
+                drawList.AddCircle(new Vector2(markerX, markerY), 5.0f, 0xFF000000, 0, 1.5f); // Black outline
+            }
         }
     }
     
@@ -390,6 +455,7 @@ public class Timeline : IDisposable
             // Calculate frame within the visible range
             CurrentFrame = TimelineStart + (int)(relativeX * visibleFrames);
             CurrentFrame = Math.Max(0, Math.Min(TotalFrames, CurrentFrame)); // Clamp to total range
+            CurrentFrameFloat = CurrentFrame; // Keep fractional frame in sync
         }
         
         RenderFrameLabelsAndGrid(itemRect, itemSize, visibleFrames, scrubberEnd);
@@ -482,7 +548,7 @@ public class Timeline : IDisposable
         drawList.AddLine(new Vector2(playheadX, topY), new Vector2(playheadX, bottomY), playheadColor, 2.0f);
     }
     
-    private void CalculateTotalFrames()
+    public void CalculateTotalFrames()
     {
         // Calculate dynamic timeline length based on keyframes from all objects
         int maxKeyframe = 0;
@@ -690,6 +756,51 @@ public class Timeline : IDisposable
     }
     
     // Evaluate keyframes for any keyframe dictionary with specified default
+    public float EvaluateKeyframesWithDefault(Dictionary<int, float> keyframes, float frame, float defaultValue)
+    {
+        if (keyframes.Count == 0)
+            return defaultValue; // Return the specified default for empty keyframes
+            
+        // Find surrounding keyframes for interpolation
+        var sortedFrames = keyframes.Keys.OrderBy(k => k).ToList();
+        
+        // Before first keyframe
+        if (frame < sortedFrames[0])
+            return keyframes[sortedFrames[0]];
+            
+        // After last keyframe
+        if (frame > sortedFrames[sortedFrames.Count - 1])
+            return keyframes[sortedFrames[sortedFrames.Count - 1]];
+            
+        // Find the two keyframes to interpolate between
+        int leftFrame = -1, rightFrame = -1;
+        for (int i = 0; i < sortedFrames.Count - 1; i++)
+        {
+            if (frame >= sortedFrames[i] && frame <= sortedFrames[i + 1])
+            {
+                leftFrame = sortedFrames[i];
+                rightFrame = sortedFrames[i + 1];
+                break;
+            }
+        }
+        
+        if (leftFrame == -1 || rightFrame == -1)
+            return keyframes[sortedFrames[0]]; // Fallback
+            
+        // If we're exactly on a keyframe, return its value
+        if (Math.Abs(frame - leftFrame) < 0.001f)
+            return keyframes[leftFrame];
+        if (Math.Abs(frame - rightFrame) < 0.001f)
+            return keyframes[rightFrame];
+            
+        // Linear interpolation with fractional frame
+        float leftValue = keyframes[leftFrame];
+        float rightValue = keyframes[rightFrame];
+        float t = (frame - leftFrame) / (rightFrame - leftFrame);
+        
+        return leftValue + (rightValue - leftValue) * t;
+    }
+
     public float EvaluateKeyframesWithDefault(Dictionary<int, float> keyframes, int frame, float defaultValue)
     {
         if (keyframes.Count == 0)
@@ -766,9 +877,11 @@ public class Timeline : IDisposable
     // Get animated position for a specific object at current frame
     public Vector3 GetAnimatedPosition(SceneObject obj)
     {
-        var x = EvaluateKeyframesWithDefault(obj.PosXKeyframes, CurrentFrame, 0.0f);
-        var y = EvaluateKeyframesWithDefault(obj.PosYKeyframes, CurrentFrame, 0.0f);
-        var z = EvaluateKeyframesWithDefault(obj.PosZKeyframes, CurrentFrame, 0.0f);
+        // Use fractional frame for smooth interpolation when playing, integer frame when scrubbing
+        float frameToUse = IsPlaying ? CurrentFrameFloat : CurrentFrame;
+        var x = EvaluateKeyframesWithDefault(obj.PosXKeyframes, frameToUse, 0.0f);
+        var y = EvaluateKeyframesWithDefault(obj.PosYKeyframes, frameToUse, 0.0f);
+        var z = EvaluateKeyframesWithDefault(obj.PosZKeyframes, frameToUse, 0.0f);
         
         return new Vector3(x, y, z);
     }
@@ -776,9 +889,11 @@ public class Timeline : IDisposable
     // Get animated rotation for a specific object at current frame
     public Vector3 GetAnimatedRotation(SceneObject obj)
     {
-        var x = EvaluateKeyframesWithDefault(obj.RotXKeyframes, CurrentFrame, 0.0f);
-        var y = EvaluateKeyframesWithDefault(obj.RotYKeyframes, CurrentFrame, 0.0f);
-        var z = EvaluateKeyframesWithDefault(obj.RotZKeyframes, CurrentFrame, 0.0f);
+        // Use fractional frame for smooth interpolation when playing, integer frame when scrubbing
+        float frameToUse = IsPlaying ? CurrentFrameFloat : CurrentFrame;
+        var x = EvaluateKeyframesWithDefault(obj.RotXKeyframes, frameToUse, 0.0f);
+        var y = EvaluateKeyframesWithDefault(obj.RotYKeyframes, frameToUse, 0.0f);
+        var z = EvaluateKeyframesWithDefault(obj.RotZKeyframes, frameToUse, 0.0f);
         
         return new Vector3(x, y, z);
     }
@@ -786,9 +901,11 @@ public class Timeline : IDisposable
     // Get animated scale for a specific object at current frame
     public Vector3 GetAnimatedScale(SceneObject obj)
     {
-        var x = EvaluateKeyframesWithDefault(obj.ScaleXKeyframes, CurrentFrame, 1.0f);
-        var y = EvaluateKeyframesWithDefault(obj.ScaleYKeyframes, CurrentFrame, 1.0f);
-        var z = EvaluateKeyframesWithDefault(obj.ScaleZKeyframes, CurrentFrame, 1.0f);
+        // Use fractional frame for smooth interpolation when playing, integer frame when scrubbing
+        float frameToUse = IsPlaying ? CurrentFrameFloat : CurrentFrame;
+        var x = EvaluateKeyframesWithDefault(obj.ScaleXKeyframes, frameToUse, 1.0f);
+        var y = EvaluateKeyframesWithDefault(obj.ScaleYKeyframes, frameToUse, 1.0f);
+        var z = EvaluateKeyframesWithDefault(obj.ScaleZKeyframes, frameToUse, 1.0f);
         
         return new Vector3(x, y, z);
     }
@@ -829,6 +946,39 @@ public class Timeline : IDisposable
         CurrentObject.ScaleYKeyframes.Clear();
         CurrentObject.ScaleZKeyframes.Clear();
         CalculateTotalFrames();
+    }
+    
+    // Keyframe selection management methods
+    public void ClearKeyframeSelection()
+    {
+        SelectedKeyframeInfo = null;
+    }
+    
+    public bool HasSelectedKeyframe()
+    {
+        return SelectedKeyframeInfo != null;
+    }
+    
+    public void DeleteSelectedKeyframe()
+    {
+        if (SelectedKeyframeInfo != null && CurrentObject != null)
+        {
+            RemoveKeyframe(SelectedKeyframeInfo.Property, SelectedKeyframeInfo.Frame);
+            SelectedKeyframeInfo = null;
+        }
+    }
+    
+    public void SetSelectedKeyframe(string property, int frame)
+    {
+        if (SelectedObjectIndex >= 0)
+        {
+            SelectedKeyframeInfo = new SelectedKeyframe
+            {
+                Property = property,
+                Frame = frame,
+                ObjectIndex = SelectedObjectIndex
+            };
+        }
     }
 
     public void Dispose()

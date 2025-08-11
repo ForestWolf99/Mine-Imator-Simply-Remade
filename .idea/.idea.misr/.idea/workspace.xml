@@ -9,7 +9,11 @@
   <component name="ChangeListManager">
     <list default="true" id="898e41cb-63c6-4d46-9ea9-2fa708ccb2d4" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/.idea.misr/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/.idea.misr/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/misr/Rendering/Viewport3D.cs" beforeDir="false" afterPath="$PROJECT_DIR$/misr/Rendering/Viewport3D.cs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/imgui.ini" beforeDir="false" afterPath="$PROJECT_DIR$/imgui.ini" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/misr/Core/Program.cs" beforeDir="false" afterPath="$PROJECT_DIR$/misr/Core/Program.cs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/misr/Core/SimpleUIRenderer.cs" beforeDir="false" afterPath="$PROJECT_DIR$/misr/Core/SimpleUIRenderer.cs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/misr/UI/PropertiesPanel.cs" beforeDir="false" afterPath="$PROJECT_DIR$/misr/UI/PropertiesPanel.cs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/misr/UI/Timeline.cs" beforeDir="false" afterPath="$PROJECT_DIR$/misr/UI/Timeline.cs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -34,6 +38,9 @@
     &quot;accountId&quot;: &quot;b5f9e498-c965-43cf-b40e-4ed9e7d91616&quot;
   }
 }</component>
+  <component name="HighlightingSettingsPerFile">
+    <setting file="mock://D:/Dev/Apps/misr/misr/Rendering/Viewport3D.cs" root0="SKIP_HIGHLIGHTING" />
+  </component>
   <component name="MetaFilesCheckinStateConfiguration" checkMetaFiles="true" />
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 0
@@ -96,7 +103,7 @@
       <updated>1754812384242</updated>
       <workItem from="1754812385810" duration="216000" />
       <workItem from="1754812626926" duration="1974000" />
-      <workItem from="1754814645642" duration="371000" />
+      <workItem from="1754814645642" duration="4800000" />
     </task>
     <task id="LOCAL-00001" summary="DO">
       <option name="closed" value="true" />
@@ -106,7 +113,15 @@
       <option name="project" value="LOCAL" />
       <updated>1754812681050</updated>
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="some fix">
+      <option name="closed" value="true" />
+      <created>1754815168155</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1754815168155</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -117,7 +132,8 @@
   <component name="VcsManagerConfiguration">
     <option name="CLEAR_INITIAL_COMMIT_MESSAGE" value="true" />
     <MESSAGE value="DO" />
-    <option name="LAST_COMMIT_MESSAGE" value="DO" />
+    <MESSAGE value="some fix" />
+    <option name="LAST_COMMIT_MESSAGE" value="some fix" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>

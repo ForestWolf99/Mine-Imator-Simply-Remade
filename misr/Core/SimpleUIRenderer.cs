@@ -12,10 +12,6 @@ using Misr.Core;
 
 namespace Misr;
 
-
-
-
-
 public class SimpleUIRenderer : IDisposable
 {
     private IWindow _window;
@@ -74,11 +70,15 @@ public class SimpleUIRenderer : IDisposable
     private bool _ePressed = false;
     private bool _qPressed = false;
     
+    // Object deletion confirmation state
+    private bool _showDeleteConfirmation = false;
+    private bool _yesButtonWasDown = false;
+    private bool _noButtonWasDown = false;
+    private bool _viewportWasHovered = false;
+    private Vector2 _deleteDialogPosition = Vector2.Zero;
 
-    
 
-
-    public SimpleUIRenderer(object? vk, IWindow window)
+    public SimpleUIRenderer(IWindow window)
     {
         _window = window;
     }
@@ -90,7 +90,7 @@ public class SimpleUIRenderer : IDisposable
             _gl = GL.GetApi(_window);
             _inputContext = _window.CreateInput();
             _textureAtlas = new TextureAtlas(_gl);
-        _viewport3D = new Viewport3D(_gl, _textureAtlas);
+            _viewport3D = new Viewport3D(_gl, _textureAtlas);
             _timeline = new Timeline();
             _propertiesPanel = new PropertiesPanel();
             _sceneTreePanel = new SceneTreePanel();
@@ -178,6 +178,25 @@ public class SimpleUIRenderer : IDisposable
                 if (key == Key.E) _ePressed = true;
                 if (key == Key.Q) _qPressed = true;
                 if (key == Key.F7) SpawnCube();
+                if (key == Key.Delete) 
+                {
+                    if (_timeline.HasSelectedKeyframe() && _timeline.IsHovered)
+                    {
+                        _timeline.DeleteSelectedKeyframe();
+                    }
+                }
+                if (key == Key.X)
+                {
+                    // Show delete confirmation if viewport was hovered and object is selected
+                    if (_viewportWasHovered && _selectedObjectIndex >= 0 && _selectedObjectIndex < _sceneObjects.Count)
+                    {
+                        // Store current mouse position for dialog placement
+                        var io = ImGui.GetIO();
+                        _deleteDialogPosition = new Vector2(io.MousePos.X, io.MousePos.Y);
+                        
+                        _showDeleteConfirmation = true;
+                    }
+                }
             };
             
             keyboard.KeyUp += (keyboard, key, scancode) =>
@@ -256,16 +275,6 @@ public class SimpleUIRenderer : IDisposable
         io.Fonts.SetTexID((IntPtr)_fontTexture);
         io.Fonts.ClearTexData();
     }
-
-
-
-
-
-
-
-
-
-
 
     public void Update(float deltaTime)
     {
@@ -357,20 +366,40 @@ public class SimpleUIRenderer : IDisposable
         _gl.ClearColor(0.15f, 0.15f, 0.20f, 1.0f);
         _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
-        // Draw ImGui UI
+        // Draw ImGui UI (without dialog)
         DrawImGuiUI();
 
-        // Render ImGui
+        // Render main ImGui
         ImGui.Render();
         RenderDrawData(ImGui.GetDrawData());
         
         // Render 3D scene on top of ImGui in the viewport area  
         _viewport3D.Render(_viewportPosition, _viewportSize, _window.Size.Y);
+        
+        // Render dialog on top of everything in a separate pass
+        if (_showDeleteConfirmation)
+        {
+            // Disable depth testing for dialog overlay
+            _gl.Disable(EnableCap.DepthTest);
+            
+            // Start new frame for dialog - ImGui will use current input state
+            ImGui.NewFrame();
+            
+            RenderDeleteConfirmationDialog();
+            ImGui.Render();
+            RenderDrawData(ImGui.GetDrawData());
+            
+            // Re-enable depth testing for next frame
+            _gl.Enable(EnableCap.DepthTest);
+        }
     }
 
     private void DrawImGuiUI()
     {
         var windowSize = _window.Size;
+        
+        // Reset viewport hover state at start of frame
+        _viewportWasHovered = false;
         
         // Render scene tree panel (takes up 1/3 of vertical space on the right)
         _sceneTreePanel.Render(new Vector2(windowSize.X, windowSize.Y));
@@ -402,6 +431,9 @@ public class SimpleUIRenderer : IDisposable
             // Handle mouse interactions in viewport
             if (ImGui.IsItemHovered())
             {
+                // Track that viewport was hovered for X key deletion
+                _viewportWasHovered = true;
+                
                 // Update gizmo hover state on mouse movement
                 var mousePos = ImGui.GetMousePos();
                 _viewport3D.UpdateGizmoHover(mousePos, _viewportPosition, _viewportSize);
@@ -508,6 +540,217 @@ public class SimpleUIRenderer : IDisposable
         }
         ImGui.End();
         ImGui.PopStyleColor();
+    }
+
+    private void RenderDeleteConfirmationDialog()
+    {
+        if (!_showDeleteConfirmation) return;
+
+        // Create a regular window that acts like a modal dialog
+        var windowSize = _window.Size;
+        float dialogWidth = 280;
+        float dialogHeight = 120;
+        
+        // Position the dialog at the mouse position where X was pressed
+        var dialogPos = _deleteDialogPosition;
+        
+        // Adjust position to keep dialog fully on screen
+        if (dialogPos.X + dialogWidth > windowSize.X)
+            dialogPos.X = windowSize.X - dialogWidth - 10;
+        if (dialogPos.Y + dialogHeight > windowSize.Y)
+            dialogPos.Y = windowSize.Y - dialogHeight - 10;
+        if (dialogPos.X < 10)
+            dialogPos.X = 10;
+        if (dialogPos.Y < 10)
+            dialogPos.Y = 10;
+            
+        ImGui.SetNextWindowPos(dialogPos);
+        ImGui.SetNextWindowSize(new Vector2(dialogWidth, dialogHeight));
+        
+        // Create a fullscreen overlay first to make it modal-like
+        ImGui.SetNextWindowPos(Vector2.Zero);
+        ImGui.SetNextWindowSize(new Vector2(windowSize.X, windowSize.Y));
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, new Vector4(0.0f, 0.0f, 0.0f, 0.5f)); // Semi-transparent black overlay
+        
+        if (ImGui.Begin("##DeleteOverlay", ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove | 
+                       ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoTitleBar | 
+                       ImGuiWindowFlags.NoScrollbar))
+        {
+            // This creates a modal-like overlay that covers everything but doesn't block input
+            // Input will be handled by the dialog window on top
+        }
+        ImGui.End();
+        ImGui.PopStyleColor();
+        
+        // Now create the actual dialog on top of the overlay
+        ImGui.SetNextWindowPos(dialogPos);
+        ImGui.SetNextWindowSize(new Vector2(dialogWidth, dialogHeight));
+        
+        // Make it modal-like with no close button and always on top
+        var flags = ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove | 
+                   ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoTitleBar |
+                   ImGuiWindowFlags.AlwaysAutoResize;
+                   
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, new Vector4(0.2f, 0.2f, 0.2f, 1.0f)); // Solid dark background
+        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(1.0f, 0.0f, 0.0f, 1.0f)); // Red border
+        
+        if (ImGui.Begin("##DeleteConfirmation", flags))
+        {
+            var selectedObject = _selectedObjectIndex >= 0 && _selectedObjectIndex < _sceneObjects.Count 
+                ? _sceneObjects[_selectedObjectIndex] 
+                : null;
+
+            if (selectedObject != null)
+            {
+                ImGui.Text("DELETE OBJECT");
+                ImGui.Separator();
+                ImGui.Text($"Are you sure you want to delete '{selectedObject.Name}'?");
+                ImGui.Spacing();
+                
+                // Center buttons
+                float buttonWidth = 80.0f;
+                float spacing = ImGui.GetStyle().ItemSpacing.X;
+                float totalWidth = buttonWidth * 2 + spacing;
+                float windowWidth = ImGui.GetWindowSize().X;
+                ImGui.SetCursorPosX((windowWidth - totalWidth) * 0.5f);
+                
+                // Manual button handling with hover detection
+                var yesButtonPos = ImGui.GetCursorScreenPos();
+                var yesButtonSize = new Vector2(buttonWidth, ImGui.GetFrameHeight());
+                
+                bool yesClicked = false;
+                bool yesHovered = false;
+                
+                // Check if mouse is over Yes button
+                var mousePos = ImGui.GetMousePos();
+                if (mousePos.X >= yesButtonPos.X && mousePos.X <= yesButtonPos.X + yesButtonSize.X &&
+                    mousePos.Y >= yesButtonPos.Y && mousePos.Y <= yesButtonPos.Y + yesButtonSize.Y)
+                {
+                    yesHovered = true;
+                    if (ImGui.IsMouseDown(ImGuiMouseButton.Left))
+                    {
+                        if (!_yesButtonWasDown)
+                        {
+                            _yesButtonWasDown = true;
+                        }
+                    }
+                    else if (_yesButtonWasDown)
+                    {
+                        yesClicked = true;
+                        _yesButtonWasDown = false;
+                    }
+                }
+                else
+                {
+                    _yesButtonWasDown = false;
+                }
+                
+                // Draw Yes button with hover state
+                ImGui.PushStyleColor(ImGuiCol.Button, yesHovered ? new Vector4(0.8f, 0.2f, 0.2f, 1.0f) : new Vector4(0.6f, 0.1f, 0.1f, 1.0f));
+                ImGui.Button("Yes", yesButtonSize);
+                ImGui.PopStyleColor();
+                
+                if (yesClicked)
+                {
+                    DeleteSelectedObject();
+                    _showDeleteConfirmation = false;
+                }
+                
+                ImGui.SameLine();
+                
+                // Manual button handling for No button
+                var noButtonPos = ImGui.GetCursorScreenPos();
+                var noButtonSize = new Vector2(buttonWidth, ImGui.GetFrameHeight());
+                
+                bool noClicked = false;
+                bool noHovered = false;
+                
+                // Check if mouse is over No button
+                if (mousePos.X >= noButtonPos.X && mousePos.X <= noButtonPos.X + noButtonSize.X &&
+                    mousePos.Y >= noButtonPos.Y && mousePos.Y <= noButtonPos.Y + noButtonSize.Y)
+                {
+                    noHovered = true;
+                    if (ImGui.IsMouseDown(ImGuiMouseButton.Left))
+                    {
+                        if (!_noButtonWasDown)
+                        {
+                            _noButtonWasDown = true;
+                        }
+                    }
+                    else if (_noButtonWasDown)
+                    {
+                        noClicked = true;
+                        _noButtonWasDown = false;
+                    }
+                }
+                else
+                {
+                    _noButtonWasDown = false;
+                }
+                
+                // Draw No button with hover state
+                ImGui.PushStyleColor(ImGuiCol.Button, noHovered ? new Vector4(0.4f, 0.4f, 0.4f, 1.0f) : new Vector4(0.3f, 0.3f, 0.3f, 1.0f));
+                ImGui.Button("No", noButtonSize);
+                ImGui.PopStyleColor();
+                
+                if (noClicked)
+                {
+                    _showDeleteConfirmation = false;
+                }
+            }
+            else
+            {
+                ImGui.Text("No object selected for deletion.");
+                ImGui.Spacing();
+                
+                float buttonWidth = 60.0f;
+                float windowWidth = ImGui.GetWindowSize().X;
+                ImGui.SetCursorPosX((windowWidth - buttonWidth) * 0.5f);
+                
+                if (ImGui.Button("OK", new Vector2(buttonWidth, 0)))
+                {
+                    _showDeleteConfirmation = false;
+                }
+            }
+        }
+        ImGui.End();
+        ImGui.PopStyleColor(2);
+    }
+
+    private void DeleteSelectedObject()
+    {
+        if (_selectedObjectIndex >= 0 && _selectedObjectIndex < _sceneObjects.Count)
+        {
+            // Remove the object from the scene
+            _sceneObjects.RemoveAt(_selectedObjectIndex);
+            
+            // Adjust selection index
+            if (_selectedObjectIndex >= _sceneObjects.Count)
+            {
+                _selectedObjectIndex = _sceneObjects.Count - 1; // Select last object if current was last
+            }
+            
+            // If no objects left, deselect
+            if (_sceneObjects.Count == 0)
+            {
+                _selectedObjectIndex = -1;
+            }
+            
+            // Update all UI panels with new selection
+            _propertiesPanel.SelectedObjectIndex = _selectedObjectIndex;
+            _viewport3D.SelectedObjectIndex = _selectedObjectIndex;
+            _timeline.SelectedObjectIndex = _selectedObjectIndex;
+            _sceneTreePanel.SelectedObjectIndex = _selectedObjectIndex;
+            
+            // Update references to scene objects
+            _propertiesPanel.SceneObjects = _sceneObjects;
+            _viewport3D.SceneObjects = _sceneObjects;
+            _timeline.SceneObjects = _sceneObjects;
+            _sceneTreePanel.SceneObjects = _sceneObjects;
+            
+            // Recalculate timeline frames after object deletion
+            _timeline.CalculateTotalFrames();
+        }
     }
 
 
