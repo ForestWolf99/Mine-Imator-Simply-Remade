@@ -357,9 +357,7 @@ public class SimpleUIRenderer : IDisposable
         if (!_initialized) return;
 
         // Update window title
-        var propertiesInfo = _propertiesPanel.GetPropertiesInfo();
-        var timelineInfo = $"Frame:{_timeline.CurrentFrame}/{_timeline.TotalFrames} {(_timeline.IsPlaying ? "[PLAYING]" : "[STOPPED]")} Zoom:{_timeline.TimelineZoom:F1}x";
-        _window.Title = $"Misr - ImGui UI - {propertiesInfo} | {timelineInfo}";
+        _window.Title = "Mine Imator Simply Remade";
 
         // Clear background
         _gl.ClearColor(0.15f, 0.15f, 0.20f, 1.0f);

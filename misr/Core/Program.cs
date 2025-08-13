@@ -67,8 +67,20 @@ class Program
             {
                 var imageResult = ImageResult.FromStream(stream, ColorComponents.RedGreenBlueAlpha);
                 
+                // Flip the image vertically to fix upside-down display
+                var flippedData = new byte[imageResult.Data.Length];
+                int bytesPerPixel = 4; // RGBA
+                int stride = imageResult.Width * bytesPerPixel;
+                
+                for (int y = 0; y < imageResult.Height; y++)
+                {
+                    int srcOffset = y * stride;
+                    int dstOffset = (imageResult.Height - 1 - y) * stride;
+                    Array.Copy(imageResult.Data, srcOffset, flippedData, dstOffset, stride);
+                }
+                
                 // Create icon using the Silk.NET API
-                var iconData = new RawImage(imageResult.Width, imageResult.Height, new Memory<byte>(imageResult.Data));
+                var iconData = new RawImage(imageResult.Width, imageResult.Height, new Memory<byte>(flippedData));
                 
                 _window!.SetWindowIcon(new ReadOnlySpan<RawImage>(new[] { iconData }));
                 Console.WriteLine("Window icon set successfully!");
