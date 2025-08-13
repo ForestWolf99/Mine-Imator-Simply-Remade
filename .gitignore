@@ -348,5 +348,9 @@ FodyWeavers.xsd
 # JetBrains Rider
 *.sln.iml
 
+# FFmpeg binaries (downloaded automatically during build)
+ffmpeg.exe
+ffmpeg
+
 # Agent configuration file (user-specific)
 AGENT.md

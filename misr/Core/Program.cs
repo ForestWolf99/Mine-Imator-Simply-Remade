@@ -5,6 +5,8 @@ using System.Numerics;
 using System.Reflection;
 using StbImageSharp;
 using Silk.NET.Core;
+using System.Runtime.InteropServices;
+using System.Diagnostics;
 
 namespace Misr;
 
@@ -13,9 +15,95 @@ class Program
     private static IWindow? _window;
     private static SimpleUIRenderer? _renderer;
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int MessageBox(IntPtr hWnd, string text, string caption, uint type);
+    
+    private static string GetFFmpegExecutableName()
+    {
+        return RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "ffmpeg.exe" : "ffmpeg";
+    }
+    
+    private static void ShowErrorDialog(string message, string title)
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            MessageBox(IntPtr.Zero, message, title, 0x10); // MB_ICONERROR
+        }
+        else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        {
+            // Try different Linux dialog tools in order of preference
+            var dialogTools = new[] { "zenity", "kdialog", "xmessage" };
+            
+            foreach (var tool in dialogTools)
+            {
+                try
+                {
+                    if (IsCommandAvailable(tool))
+                    {
+                        var processInfo = tool switch
+                        {
+                            "zenity" => new ProcessStartInfo("zenity", $"--error --text=\"{message}\" --title=\"{title}\""),
+                            "kdialog" => new ProcessStartInfo("kdialog", $"--error \"{message}\" --title \"{title}\""),
+                            "xmessage" => new ProcessStartInfo("xmessage", $"-center \"{title}\\n\\n{message}\""),
+                            _ => null
+                        };
+                        
+                        if (processInfo != null)
+                        {
+                            Process.Start(processInfo)?.WaitForExit();
+                            return;
+                        }
+                    }
+                }
+                catch { /* Continue to next tool */ }
+            }
+            
+            // Fallback to console output
+            Console.Error.WriteLine($"ERROR: {title}");
+            Console.Error.WriteLine(message);
+        }
+        else
+        {
+            // Fallback for other platforms
+            Console.Error.WriteLine($"ERROR: {title}");
+            Console.Error.WriteLine(message);
+        }
+    }
+    
+    private static bool IsCommandAvailable(string command)
+    {
+        try
+        {
+            var processInfo = new ProcessStartInfo("which", command)
+            {
+                RedirectStandardOutput = true,
+                UseShellExecute = false
+            };
+            var process = Process.Start(processInfo);
+            process?.WaitForExit();
+            return process?.ExitCode == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
 
     static void Main(string[] args)
     {
+        // Check if ffmpeg binary exists in the application directory
+        var ffmpegExecutable = GetFFmpegExecutableName();
+        var ffmpegPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ffmpegExecutable);
+        if (!File.Exists(ffmpegPath))
+        {
+            ShowErrorDialog(
+                $"FFmpeg binary ({ffmpegExecutable}) not found in application directory.\n\nPlease ensure {ffmpegExecutable} is present alongside the application executable.", 
+                "Mine Imator Simply Remade - Missing Dependency");
+            Environment.Exit(1);
+            return;
+        }
+
         // Get primary monitor to calculate window size and position
         var monitor = Silk.NET.Windowing.Monitor.GetMainMonitor(null);
         var displaySize = monitor.Bounds.Size;

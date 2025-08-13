@@ -40,4 +40,46 @@
     <RemoveDir Directories="$(PublishDir)" />
   </Target>
 
+  <!-- Windows-specific FFmpeg download and copy -->
+  <Target Name="DownloadFFmpegWindows" BeforeTargets="Build" Condition="$([MSBuild]::IsOSPlatform('Windows')) AND !Exists('$(MSBuildProjectDirectory)\..\ffmpeg.exe')">
+    <Message Text="FFmpeg not found, downloading for Windows..." Importance="high" />
+    <Exec Command="powershell -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\download-ffmpeg.ps1&quot;" 
+          WorkingDirectory="$(MSBuildProjectDirectory)\.." />
+  </Target>
+
+  <Target Name="CopyFFmpegToOutputWindows" AfterTargets="Build" Condition="$([MSBuild]::IsOSPlatform('Windows')) AND Exists('$(MSBuildProjectDirectory)\..\ffmpeg.exe')">
+    <Message Text="Copying ffmpeg.exe to output directory..." Importance="high" />
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\..\ffmpeg.exe" 
+          DestinationFolder="$(OutputPath)" 
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="CopyFFmpegToPublishWindows" AfterTargets="Publish" Condition="$([MSBuild]::IsOSPlatform('Windows')) AND Exists('$(MSBuildProjectDirectory)\..\ffmpeg.exe')">
+    <Message Text="Copying ffmpeg.exe to publish directory..." Importance="high" />
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\..\ffmpeg.exe" 
+          DestinationFolder="$(PublishDir)" 
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- Linux-specific FFmpeg download and copy -->
+  <Target Name="DownloadFFmpegLinux" BeforeTargets="Build" Condition="$([MSBuild]::IsOSPlatform('Linux')) AND !Exists('$(MSBuildProjectDirectory)/../ffmpeg')">
+    <Message Text="FFmpeg not found, downloading for Linux..." Importance="high" />
+    <Exec Command="bash &quot;$(MSBuildProjectDirectory)/../download-ffmpeg.sh&quot;" 
+          WorkingDirectory="$(MSBuildProjectDirectory)/.." />
+  </Target>
+
+  <Target Name="CopyFFmpegToOutputLinux" AfterTargets="Build" Condition="$([MSBuild]::IsOSPlatform('Linux')) AND Exists('$(MSBuildProjectDirectory)/../ffmpeg')">
+    <Message Text="Copying ffmpeg to output directory..." Importance="high" />
+    <Copy SourceFiles="$(MSBuildProjectDirectory)/../ffmpeg" 
+          DestinationFolder="$(OutputPath)" 
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="CopyFFmpegToPublishLinux" AfterTargets="Publish" Condition="$([MSBuild]::IsOSPlatform('Linux')) AND Exists('$(MSBuildProjectDirectory)/../ffmpeg')">
+    <Message Text="Copying ffmpeg to publish directory..." Importance="high" />
+    <Copy SourceFiles="$(MSBuildProjectDirectory)/../ffmpeg" 
+          DestinationFolder="$(PublishDir)" 
+          SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>
