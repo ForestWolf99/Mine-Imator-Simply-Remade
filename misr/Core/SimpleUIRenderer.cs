@@ -308,8 +308,8 @@ public class SimpleUIRenderer : IDisposable
         // Update timeline
         _timeline.Update(deltaTime);
         
-        // Update all objects' transforms from keyframes only when playing or scrubbing
-        if (_timeline.IsPlaying || _timeline.IsScrubbing)
+        // Update all objects' transforms from keyframes when playing, scrubbing, or dragging keyframes
+        if (_timeline.IsPlaying || _timeline.IsScrubbing || _timeline.IsDraggingKeyframes)
         {
             foreach (var obj in _sceneObjects)
             {
@@ -326,8 +326,8 @@ public class SimpleUIRenderer : IDisposable
             }
         }
         
-        // Update selected object's properties panel display only when playing or scrubbing
-        if (_timeline.HasKeyframes() && (_timeline.IsPlaying || _timeline.IsScrubbing))
+        // Update selected object's properties panel display when playing, scrubbing, or dragging keyframes
+        if (_timeline.HasKeyframes() && (_timeline.IsPlaying || _timeline.IsScrubbing || _timeline.IsDraggingKeyframes))
         {
             var keyframePosition = _timeline.GetAnimatedPosition();
             var keyframeRotation = _timeline.GetAnimatedRotation();

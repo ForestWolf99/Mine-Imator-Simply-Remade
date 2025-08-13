@@ -21,6 +21,7 @@ public class Timeline : IDisposable
     public bool IsPlaying { get; set; } = false;
     public bool IsScrubbing { get; private set; } = false;
     public bool IsHovered { get; private set; } = false;
+    public bool IsDraggingKeyframes => _isDraggingKeyframe;
     
     // Animation framerate (frames per second)
     public float FrameRate { get; set; } = 30.0f;
@@ -50,9 +51,37 @@ public class Timeline : IDisposable
         public string Property { get; set; } = "";
         public int Frame { get; set; } = -1;
         public int ObjectIndex { get; set; } = -1;
+        
+        public override bool Equals(object? obj)
+        {
+            return obj is SelectedKeyframe other &&
+                   Property == other.Property &&
+                   Frame == other.Frame &&
+                   ObjectIndex == other.ObjectIndex;
+        }
+        
+        public override int GetHashCode()
+        {
+            return HashCode.Combine(Property, Frame, ObjectIndex);
+        }
     }
     
-    public SelectedKeyframe? SelectedKeyframeInfo { get; private set; } = null;
+    // Multi-selection support
+    public HashSet<SelectedKeyframe> SelectedKeyframes { get; private set; } = new HashSet<SelectedKeyframe>();
+    
+    // Legacy single selection for backward compatibility
+    public SelectedKeyframe? SelectedKeyframeInfo => SelectedKeyframes.FirstOrDefault();
+    
+    // Keyframe dragging state
+    private bool _isDraggingKeyframe = false;
+    private SelectedKeyframe? _draggingKeyframeInfo = null;
+    private Vector2 _dragStartMousePos = Vector2.Zero;
+    private int _dragStartFrame = -1;
+    
+    // Selection box dragging state
+    private bool _isDragSelecting = false;
+    private Vector2 _dragSelectionStart = Vector2.Zero;
+    private Vector2 _dragSelectionEnd = Vector2.Zero;
     
     // Current selected object helper
     public SceneObject? CurrentObject => 
@@ -75,8 +104,23 @@ public class Timeline : IDisposable
         // Clear keyframe selection if object changed
         if (_previousSelectedObjectIndex != SelectedObjectIndex)
         {
-            SelectedKeyframeInfo = null;
+            SelectedKeyframes.Clear();
+            _isDraggingKeyframe = false;
+            _draggingKeyframeInfo = null;
             _previousSelectedObjectIndex = SelectedObjectIndex;
+        }
+        
+        // Stop dragging if mouse button is released
+        if (_isDraggingKeyframe && !ImGui.IsMouseDown(ImGuiMouseButton.Left))
+        {
+            _isDraggingKeyframe = false;
+            _draggingKeyframeInfo = null;
+        }
+        
+        // Stop drag selection if mouse button is released
+        if (_isDragSelecting && !ImGui.IsMouseDown(ImGuiMouseButton.Left))
+        {
+            _isDragSelecting = false;
         }
         
         // Update animation at specified frame rate
@@ -399,6 +443,83 @@ public class Timeline : IDisposable
         // Check for mouse interaction on this track
         bool isTrackHovered = ImGui.IsItemHovered();
         
+        // Handle drag selection start on empty track space
+        if (isTrackHovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left) && !_isDraggingKeyframe)
+        {
+            var mousePos = ImGui.GetMousePos();
+            bool clickedOnKeyframe = false;
+            
+            // Check if we clicked on any keyframe
+            foreach (var frame in keyframeFrames)
+            {
+                if (frame < TimelineStart || frame > TimelineStart + visibleFrames)
+                    continue;
+                    
+                float normalizedPos = (frame - TimelineStart) / (float)visibleFrames;
+                float markerX = trackRect.X + (normalizedPos * trackSize.X);
+                float markerY = trackRect.Y + (trackSize.Y * 0.5f);
+                float distance = Vector2.Distance(mousePos, new Vector2(markerX, markerY));
+                
+                if (distance <= 6.0f)
+                {
+                    clickedOnKeyframe = true;
+                    break;
+                }
+            }
+            
+            // If we didn't click on a keyframe, start drag selection
+            if (!clickedOnKeyframe)
+            {
+                var io = ImGui.GetIO();
+                if (!io.KeyCtrl)
+                {
+                    SelectedKeyframes.Clear(); // Clear selection unless Ctrl is held
+                }
+                _isDragSelecting = true;
+                _dragSelectionStart = mousePos;
+                _dragSelectionEnd = mousePos;
+            }
+        }
+        
+        // Update drag selection
+        if (_isDragSelecting && ImGui.IsMouseDragging(ImGuiMouseButton.Left))
+        {
+            _dragSelectionEnd = ImGui.GetMousePos();
+        }
+        
+        // Handle keyframe dragging globally (outside of keyframe loop)
+        if (_isDraggingKeyframe && _draggingKeyframeInfo != null && 
+            _draggingKeyframeInfo.Property == property && 
+            _draggingKeyframeInfo.ObjectIndex == SelectedObjectIndex)
+        {
+            if (ImGui.IsMouseDragging(ImGuiMouseButton.Left))
+            {
+                // Calculate new frame position based on mouse drag
+                var currentMousePos = ImGui.GetMousePos();
+                float deltaX = currentMousePos.X - _dragStartMousePos.X;
+                float framePixelWidth = trackSize.X / visibleFrames;
+                int frameDelta = (int)(deltaX / framePixelWidth);
+                int newFrame = Math.Max(0, _dragStartFrame + frameDelta);
+                
+                // Only update if frame changed significantly (prevent excessive updates)
+                if (newFrame != _draggingKeyframeInfo.Frame && newFrame >= 0)
+                {
+                    // Move all selected keyframes by the same delta
+                    int actualFrameDelta = newFrame - _draggingKeyframeInfo.Frame;
+                    MoveSelectedKeyframes(actualFrameDelta);
+                    
+                    // Update the dragging keyframe reference
+                    _draggingKeyframeInfo.Frame = newFrame;
+                }
+            }
+            else if (!ImGui.IsMouseDown(ImGuiMouseButton.Left))
+            {
+                // Mouse released, stop dragging
+                _isDraggingKeyframe = false;
+                _draggingKeyframeInfo = null;
+            }
+        }
+        
         // Draw keyframe markers only if they're in the visible range
         foreach (var frame in keyframeFrames)
         {
@@ -409,26 +530,62 @@ public class Timeline : IDisposable
             float markerX = trackRect.X + (normalizedPos * trackSize.X);
             float markerY = trackRect.Y + (trackSize.Y * 0.5f);
             
+            // Create keyframe identifier for this keyframe
+            var keyframeId = new SelectedKeyframe
+            {
+                Property = property,
+                Frame = frame,
+                ObjectIndex = SelectedObjectIndex
+            };
+            
             // Check if this keyframe is selected
-            bool isSelected = SelectedKeyframeInfo != null && 
-                              SelectedKeyframeInfo.Property == property && 
-                              SelectedKeyframeInfo.Frame == frame && 
-                              SelectedKeyframeInfo.ObjectIndex == SelectedObjectIndex;
+            bool isSelected = SelectedKeyframes.Contains(keyframeId);
             
             // Check if mouse is over this keyframe
             var mousePos = ImGui.GetMousePos();
             float distance = Vector2.Distance(mousePos, new Vector2(markerX, markerY));
             bool isHovered = distance <= 6.0f && isTrackHovered;
             
-            // Handle keyframe selection
-            if (isHovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+            // Handle keyframe selection (only if not currently dragging)
+            if (isHovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left) && !_isDraggingKeyframe)
             {
-                SelectedKeyframeInfo = new SelectedKeyframe
+                var io = ImGui.GetIO();
+                if (io.KeyCtrl)
                 {
-                    Property = property,
-                    Frame = frame,
-                    ObjectIndex = SelectedObjectIndex
-                };
+                    // Ctrl+click: toggle selection
+                    if (isSelected)
+                    {
+                        SelectedKeyframes.Remove(keyframeId);
+                    }
+                    else
+                    {
+                        SelectedKeyframes.Add(keyframeId);
+                    }
+                }
+                else
+                {
+                    // Normal click: if clicking on already selected keyframe, start dragging all selected
+                    if (isSelected && SelectedKeyframes.Count > 1)
+                    {
+                        // Start dragging all selected keyframes
+                        _isDraggingKeyframe = true;
+                        _draggingKeyframeInfo = keyframeId;
+                        _dragStartMousePos = mousePos;
+                        _dragStartFrame = frame;
+                    }
+                    else
+                    {
+                        // Clear selection and select this keyframe
+                        SelectedKeyframes.Clear();
+                        SelectedKeyframes.Add(keyframeId);
+                        
+                        // Initialize drag state
+                        _isDraggingKeyframe = true;
+                        _draggingKeyframeInfo = keyframeId;
+                        _dragStartMousePos = mousePos;
+                        _dragStartFrame = frame;
+                    }
+                }
             }
             
             // Draw keyframe marker with appropriate color
@@ -447,6 +604,35 @@ public class Timeline : IDisposable
             {
                 drawList.AddCircle(new Vector2(markerX, markerY), 5.0f, 0xFF000000, 0, 1.5f); // Black outline
             }
+            
+            // Handle drag selection for this keyframe
+            if (_isDragSelecting)
+            {
+                // Check if keyframe is inside selection rectangle
+                var selectionMin = new Vector2(Math.Min(_dragSelectionStart.X, _dragSelectionEnd.X), 
+                                             Math.Min(_dragSelectionStart.Y, _dragSelectionEnd.Y));
+                var selectionMax = new Vector2(Math.Max(_dragSelectionStart.X, _dragSelectionEnd.X), 
+                                             Math.Max(_dragSelectionStart.Y, _dragSelectionEnd.Y));
+                
+                if (markerX >= selectionMin.X && markerX <= selectionMax.X &&
+                    markerY >= selectionMin.Y && markerY <= selectionMax.Y)
+                {
+                    // Add to selection if not already selected
+                    SelectedKeyframes.Add(keyframeId);
+                }
+            }
+        }
+        
+        // Draw selection rectangle if drag selecting
+        if (_isDragSelecting)
+        {
+            var selectionMin = new Vector2(Math.Min(_dragSelectionStart.X, _dragSelectionEnd.X), 
+                                         Math.Min(_dragSelectionStart.Y, _dragSelectionEnd.Y));
+            var selectionMax = new Vector2(Math.Max(_dragSelectionStart.X, _dragSelectionEnd.X), 
+                                         Math.Max(_dragSelectionStart.Y, _dragSelectionEnd.Y));
+            
+            drawList.AddRect(selectionMin, selectionMax, 0xFF00FFFF, 0.0f, ImDrawFlags.None, 1.5f); // Yellow selection box
+            drawList.AddRectFilled(selectionMin, selectionMax, 0x2200FFFF); // Semi-transparent yellow fill
         }
     }
     
@@ -690,6 +876,184 @@ public class Timeline : IDisposable
         
         keyframes.Remove(frame);
         CalculateTotalFrames(); // Recalculate timeline length
+    }
+    
+    public void MoveKeyframe(string property, int oldFrame, int newFrame)
+    {
+        if (CurrentObject == null || oldFrame == newFrame) return;
+        
+        Dictionary<int, float> keyframes;
+        switch (property.ToLower())
+        {
+            case "x":
+            case "position.x":
+                keyframes = CurrentObject.PosXKeyframes;
+                break;
+            case "y":
+            case "position.y":
+                keyframes = CurrentObject.PosYKeyframes;
+                break;
+            case "z":
+            case "position.z":
+                keyframes = CurrentObject.PosZKeyframes;
+                break;
+            case "rotation.x":
+                keyframes = CurrentObject.RotXKeyframes;
+                break;
+            case "rotation.y":
+                keyframes = CurrentObject.RotYKeyframes;
+                break;
+            case "rotation.z":
+                keyframes = CurrentObject.RotZKeyframes;
+                break;
+            case "scale.x":
+                keyframes = CurrentObject.ScaleXKeyframes;
+                break;
+            case "scale.y":
+                keyframes = CurrentObject.ScaleYKeyframes;
+                break;
+            case "scale.z":
+                keyframes = CurrentObject.ScaleZKeyframes;
+                break;
+            default:
+                return; // Unknown property
+        }
+        
+        // Get the value at the old frame
+        if (keyframes.ContainsKey(oldFrame))
+        {
+            float value = keyframes[oldFrame];
+            keyframes.Remove(oldFrame); // Remove from old position
+            
+            // Find a suitable target frame if the desired frame is occupied
+            int targetFrame = FindAvailableFrame(keyframes, newFrame, oldFrame);
+            keyframes[targetFrame] = value; // Add at target position
+            CalculateTotalFrames(); // Recalculate timeline length
+        }
+    }
+    
+    private int FindAvailableFrame(Dictionary<int, float> keyframes, int preferredFrame, int excludeFrame)
+    {
+        // If preferred frame is available (not occupied by a different keyframe), use it
+        if (!keyframes.ContainsKey(preferredFrame) || preferredFrame == excludeFrame)
+        {
+            return preferredFrame;
+        }
+        
+        // Find the next available frame by searching in both directions
+        // This allows dragging "through" existing keyframes to find open spots
+        for (int offset = 1; offset <= 10; offset++) // Search up to 10 frames away
+        {
+            // Try frame to the right first (positive direction)
+            int rightFrame = preferredFrame + offset;
+            if (!keyframes.ContainsKey(rightFrame) && rightFrame != excludeFrame)
+            {
+                return rightFrame;
+            }
+            
+            // Try frame to the left (negative direction)
+            int leftFrame = preferredFrame - offset;
+            if (leftFrame >= 0 && !keyframes.ContainsKey(leftFrame) && leftFrame != excludeFrame)
+            {
+                return leftFrame;
+            }
+        }
+        
+        // If no free frame found nearby, just use the preferred frame (this shouldn't normally happen)
+        return preferredFrame;
+    }
+    
+    private Dictionary<int, float>? GetKeyframeDictionary(string property)
+    {
+        if (CurrentObject == null) return null;
+        
+        switch (property.ToLower())
+        {
+            case "x":
+            case "position.x":
+                return CurrentObject.PosXKeyframes;
+            case "y":
+            case "position.y":
+                return CurrentObject.PosYKeyframes;
+            case "z":
+            case "position.z":
+                return CurrentObject.PosZKeyframes;
+            case "rotation.x":
+                return CurrentObject.RotXKeyframes;
+            case "rotation.y":
+                return CurrentObject.RotYKeyframes;
+            case "rotation.z":
+                return CurrentObject.RotZKeyframes;
+            case "scale.x":
+                return CurrentObject.ScaleXKeyframes;
+            case "scale.y":
+                return CurrentObject.ScaleYKeyframes;
+            case "scale.z":
+                return CurrentObject.ScaleZKeyframes;
+            default:
+                return null;
+        }
+    }
+    
+    public void MoveSelectedKeyframes(int frameDelta)
+    {
+        if (frameDelta == 0 || SelectedKeyframes.Count == 0) return;
+        
+        // Create a list of keyframes to update (to avoid modifying collection during iteration)
+        var keyframesToUpdate = new List<SelectedKeyframe>(SelectedKeyframes);
+        
+        // First pass: collect all keyframes to move and validate the move is possible
+        var moveOperations = new List<(SelectedKeyframe keyframe, int newFrame)>();
+        foreach (var keyframe in keyframesToUpdate)
+        {
+            int newFrame = Math.Max(0, keyframe.Frame + frameDelta);
+            moveOperations.Add((keyframe, newFrame));
+        }
+        
+        // Clear current selection to update with new positions
+        SelectedKeyframes.Clear();
+        
+        // Second pass: perform the moves and track actual final positions
+        foreach (var (keyframe, newFrame) in moveOperations)
+        {
+            // Get the dictionary for this property to check final position
+            var keyframes = GetKeyframeDictionary(keyframe.Property);
+            if (keyframes != null)
+            {
+                // Store value before moving
+                float value = keyframes.ContainsKey(keyframe.Frame) ? keyframes[keyframe.Frame] : 0.0f;
+                
+                // Move the keyframe (this handles collision detection)
+                MoveKeyframe(keyframe.Property, keyframe.Frame, newFrame);
+                
+                // Find where it actually ended up (might be different due to collision avoidance)
+                int actualFrame = newFrame;
+                if (keyframes.ContainsKey(newFrame) && Math.Abs(keyframes[newFrame] - value) < 0.001f)
+                {
+                    actualFrame = newFrame; // It went where we wanted
+                }
+                else
+                {
+                    // Find where it actually went
+                    foreach (var kvp in keyframes)
+                    {
+                        if (Math.Abs(kvp.Value - value) < 0.001f)
+                        {
+                            actualFrame = kvp.Key;
+                            break;
+                        }
+                    }
+                }
+                
+                // Add updated keyframe to selection with actual position
+                SelectedKeyframes.Add(new SelectedKeyframe
+                {
+                    Property = keyframe.Property,
+                    Frame = actualFrame,
+                    ObjectIndex = keyframe.ObjectIndex
+                });
+            }
+        }
     }
     
     // Evaluate keyframe value at current frame with interpolation
@@ -976,20 +1340,30 @@ public class Timeline : IDisposable
     // Keyframe selection management methods
     public void ClearKeyframeSelection()
     {
-        SelectedKeyframeInfo = null;
+        SelectedKeyframes.Clear();
     }
     
     public bool HasSelectedKeyframe()
     {
-        return SelectedKeyframeInfo != null;
+        return SelectedKeyframes.Count > 0;
+    }
+    
+    public int GetSelectedKeyframeCount()
+    {
+        return SelectedKeyframes.Count;
     }
     
     public void DeleteSelectedKeyframe()
     {
-        if (SelectedKeyframeInfo != null && CurrentObject != null)
+        if (SelectedKeyframes.Count > 0 && CurrentObject != null)
         {
-            RemoveKeyframe(SelectedKeyframeInfo.Property, SelectedKeyframeInfo.Frame);
-            SelectedKeyframeInfo = null;
+            // Delete all selected keyframes
+            var keyframesToDelete = new List<SelectedKeyframe>(SelectedKeyframes);
+            foreach (var keyframe in keyframesToDelete)
+            {
+                RemoveKeyframe(keyframe.Property, keyframe.Frame);
+            }
+            SelectedKeyframes.Clear();
         }
     }
     
@@ -997,12 +1371,13 @@ public class Timeline : IDisposable
     {
         if (SelectedObjectIndex >= 0)
         {
-            SelectedKeyframeInfo = new SelectedKeyframe
+            SelectedKeyframes.Clear();
+            SelectedKeyframes.Add(new SelectedKeyframe
             {
                 Property = property,
                 Frame = frame,
                 ObjectIndex = SelectedObjectIndex
-            };
+            });
         }
     }
 
