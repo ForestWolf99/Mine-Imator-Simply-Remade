@@ -39,6 +39,11 @@ public class SimpleUIRenderer : IDisposable
     // 3D Viewport
     private Viewport3D _viewport3D = null!;
     
+    // Framebuffer for 3D rendering
+    private uint _viewportFramebuffer;
+    private uint _viewportTexture;
+    private uint _viewportDepthBuffer;
+    
     // Texture atlas
     private TextureAtlas _textureAtlas = null!;
     
@@ -50,6 +55,9 @@ public class SimpleUIRenderer : IDisposable
     
     // Scene tree panel
     private SceneTreePanel _sceneTreePanel = null!;
+    
+    // Menu bar
+    private MenuBar _menuBar = null!;
     
     // Scene objects
     private List<SceneObject> _sceneObjects = new List<SceneObject>();
@@ -69,12 +77,9 @@ public class SimpleUIRenderer : IDisposable
     private bool _ePressed = false;
     private bool _qPressed = false;
     
-    // Object deletion confirmation state
-    private bool _showDeleteConfirmation = false;
-    private bool _yesButtonWasDown = false;
-    private bool _noButtonWasDown = false;
+    // Dialog system
+    private Dialog? _currentDialog = null;
     private bool _viewportWasHovered = false;
-    private Vector2 _deleteDialogPosition = Vector2.Zero;
 
 
     public SimpleUIRenderer(IWindow window)
@@ -93,6 +98,7 @@ public class SimpleUIRenderer : IDisposable
             _timeline = new Timeline(_gl);
             _propertiesPanel = new PropertiesPanel();
             _sceneTreePanel = new SceneTreePanel();
+            _menuBar = new MenuBar(_window);
             _propertiesPanel.SetViewport3D(_viewport3D);
             _propertiesPanel.SetTimeline(_timeline);
             _viewport3D.SetTimeline(_timeline);
@@ -115,6 +121,7 @@ public class SimpleUIRenderer : IDisposable
             // Create device objects
             CreateDeviceObjects();
             CreateFontsTexture();
+            CreateViewportFramebuffer();
             _textureAtlas.CreateTerrainAtlases();
             _viewport3D.Initialize();
             
@@ -189,11 +196,18 @@ public class SimpleUIRenderer : IDisposable
                     // Show delete confirmation if viewport was hovered and object is selected
                     if (_viewportWasHovered && _selectedObjectIndex >= 0 && _selectedObjectIndex < _sceneObjects.Count)
                     {
-                        // Store current mouse position for dialog placement
+                        var selectedObject = _sceneObjects[_selectedObjectIndex];
                         var io = ImGui.GetIO();
-                        _deleteDialogPosition = new Vector2(io.MousePos.X, io.MousePos.Y);
+                        var dialogPosition = new Vector2(io.MousePos.X, io.MousePos.Y);
                         
-                        _showDeleteConfirmation = true;
+                        _currentDialog = new Dialog(
+                            DialogType.DeleteConfirmation,
+                            "DELETE OBJECT",
+                            $"Are you sure you want to delete '{selectedObject.Name}'?",
+                            dialogPosition,
+                            () => DeleteSelectedObject(),
+                            () => { /* No action needed */ }
+                        );
                     }
                 }
             };
@@ -273,6 +287,68 @@ public class SimpleUIRenderer : IDisposable
         // Store the texture identifier
         io.Fonts.SetTexID((IntPtr)_fontTexture);
         io.Fonts.ClearTexData();
+    }
+
+    private unsafe void CreateViewportFramebuffer()
+    {
+        // Create framebuffer for 3D viewport rendering
+        _viewportFramebuffer = _gl.GenFramebuffer();
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _viewportFramebuffer);
+        
+        // Create color texture
+        _viewportTexture = _gl.GenTexture();
+        _gl.BindTexture(TextureTarget.Texture2D, _viewportTexture);
+        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgb, 1024, 768, 0, PixelFormat.Rgb, PixelType.UnsignedByte, (void*)0);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Linear);
+        _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, TextureTarget.Texture2D, _viewportTexture, 0);
+        
+        // Create depth buffer
+        _viewportDepthBuffer = _gl.GenRenderbuffer();
+        _gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _viewportDepthBuffer);
+        _gl.RenderbufferStorage(RenderbufferTarget.Renderbuffer, InternalFormat.DepthComponent, 1024, 768);
+        _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, RenderbufferTarget.Renderbuffer, _viewportDepthBuffer);
+        
+        // Check framebuffer completeness
+        if (_gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer) != GLEnum.FramebufferComplete)
+        {
+            Console.WriteLine("Viewport framebuffer not complete!");
+        }
+        
+        // Unbind framebuffer
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+    }
+
+    private unsafe void Render3DToTexture()
+    {
+        if (_viewportSize.X <= 0 || _viewportSize.Y <= 0) return;
+        
+        // Bind viewport framebuffer
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _viewportFramebuffer);
+        
+        // Update framebuffer size if needed
+        var newWidth = (uint)_viewportSize.X;
+        var newHeight = (uint)_viewportSize.Y;
+        
+        // Resize texture if needed
+        _gl.BindTexture(TextureTarget.Texture2D, _viewportTexture);
+        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgb, newWidth, newHeight, 0, PixelFormat.Rgb, PixelType.UnsignedByte, (void*)0);
+        
+        // Resize depth buffer if needed
+        _gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _viewportDepthBuffer);
+        _gl.RenderbufferStorage(RenderbufferTarget.Renderbuffer, InternalFormat.DepthComponent, newWidth, newHeight);
+        
+        // Set viewport to full framebuffer size
+        _gl.Viewport(0, 0, newWidth, newHeight);
+        
+        // Render 3D scene to framebuffer
+        _viewport3D.Render(Vector2.Zero, _viewportSize, (int)newHeight);
+        
+        // Restore default framebuffer
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+        
+        // Restore main window viewport
+        _gl.Viewport(0, 0, (uint)_window.Size.X, (uint)_window.Size.Y);
     }
 
     public void Update(float deltaTime)
@@ -363,31 +439,20 @@ public class SimpleUIRenderer : IDisposable
         _gl.ClearColor(0.15f, 0.15f, 0.20f, 1.0f);
         _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
-        // Draw ImGui UI (without dialog)
+        // Draw ImGui UI
         DrawImGuiUI();
 
         // Render main ImGui
         ImGui.Render();
         RenderDrawData(ImGui.GetDrawData());
         
-        // Render 3D scene on top of ImGui in the viewport area  
-        _viewport3D.Render(_viewportPosition, _viewportSize, _window.Size.Y);
+        // Render 3D scene to framebuffer texture
+        Render3DToTexture();
         
-        // Render dialog on top of everything in a separate pass
-        if (_showDeleteConfirmation)
+        // Check if application should exit after all rendering is complete
+        if (_menuBar.ShouldExit)
         {
-            // Disable depth testing for dialog overlay
-            _gl.Disable(EnableCap.DepthTest);
-            
-            // Start new frame for dialog - ImGui will use current input state
-            ImGui.NewFrame();
-            
-            RenderDeleteConfirmationDialog();
-            ImGui.Render();
-            RenderDrawData(ImGui.GetDrawData());
-            
-            // Re-enable depth testing for next frame
-            _gl.Enable(EnableCap.DepthTest);
+            _window.Close();
         }
     }
 
@@ -408,11 +473,12 @@ public class SimpleUIRenderer : IDisposable
         _timeline.Render(new Vector2(windowSize.X, windowSize.Y));
 
         // 3D Viewport (Main area not occupied by properties or timeline)
-        ImGui.SetNextWindowPos(new Vector2(0, 0));
-        ImGui.SetNextWindowSize(new Vector2(windowSize.X - 280, windowSize.Y - 200));
+        var menuBarHeight = ImGui.GetFrameHeight();
+        ImGui.SetNextWindowPos(new Vector2(0, menuBarHeight));
+        ImGui.SetNextWindowSize(new Vector2(windowSize.X - 280, windowSize.Y - 200 - menuBarHeight));
         ImGui.PushStyleColor(ImGuiCol.WindowBg, new Vector4(0.1f, 0.1f, 0.1f, 1.0f));
         
-        if (ImGui.Begin("3D Viewport", ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoCollapse))
+        if (ImGui.Begin("3D Viewport", ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoBringToFrontOnFocus))
         {
             // Get the viewport area within the window
             var viewportPos = ImGui.GetCursorScreenPos();
@@ -422,8 +488,8 @@ public class SimpleUIRenderer : IDisposable
             _viewportPosition = viewportPos;
             _viewportSize = viewportSize;
             
-            // Add invisible button to capture the full viewport area (no background, 3D will render here)
-            ImGui.InvisibleButton("##3DViewport", viewportSize);
+            // Display 3D scene texture in the viewport (flip Y to correct orientation)
+            ImGui.Image((IntPtr)_viewportTexture, viewportSize, new Vector2(0, 1), new Vector2(1, 0));
             
             // Handle mouse interactions in viewport
             if (ImGui.IsItemHovered())
@@ -537,185 +603,26 @@ public class SimpleUIRenderer : IDisposable
         }
         ImGui.End();
         ImGui.PopStyleColor();
-    }
-
-    private void RenderDeleteConfirmationDialog()
-    {
-        if (!_showDeleteConfirmation) return;
-
-        // Create a regular window that acts like a modal dialog
-        var windowSize = _window.Size;
         
-        // Position the dialog at the mouse position where X was pressed
-        var dialogPos = _deleteDialogPosition;
+        // Render menu bar normally in main UI pass (3D is now a texture)
+        _menuBar.Render();
         
-        // Don't set fixed size - let ImGui auto-resize to fit content
-        ImGui.SetNextWindowPos(dialogPos);
-        
-        // Create a fullscreen overlay first to make it modal-like
-        ImGui.SetNextWindowPos(Vector2.Zero);
-        ImGui.SetNextWindowSize(new Vector2(windowSize.X, windowSize.Y));
-        ImGui.PushStyleColor(ImGuiCol.WindowBg, new Vector4(0.0f, 0.0f, 0.0f, 0.5f)); // Semi-transparent black overlay
-        
-        if (ImGui.Begin("##DeleteOverlay", ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove | 
-                       ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoTitleBar | 
-                       ImGuiWindowFlags.NoScrollbar))
+        // Render current dialog in main UI pass (will appear on top of texture)
+        if (_currentDialog != null)
         {
-            // This creates a modal-like overlay that covers everything but doesn't block input
-            // Input will be handled by the dialog window on top
-        }
-        ImGui.End();
-        ImGui.PopStyleColor();
-        
-        // Now create the actual dialog on top of the overlay
-        ImGui.SetNextWindowPos(dialogPos);
-        
-        // Make it modal-like with no close button and always on top
-        var flags = ImGuiWindowFlags.NoMove | 
-                   ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoTitleBar |
-                   ImGuiWindowFlags.AlwaysAutoResize;
-                   
-        ImGui.PushStyleColor(ImGuiCol.WindowBg, new Vector4(0.2f, 0.2f, 0.2f, 1.0f)); // Solid dark background
-        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(1.0f, 0.0f, 0.0f, 1.0f)); // Red border
-        
-        if (ImGui.Begin("##DeleteConfirmation", flags))
-        {
-            // Adjust position to keep auto-sized dialog fully on screen
-            var currentDialogSize = ImGui.GetWindowSize();
-            var currentDialogPos = ImGui.GetWindowPos();
+            _currentDialog.Render(new Vector2(windowSize.X, windowSize.Y));
             
-            var adjustedPos = currentDialogPos;
-            if (currentDialogPos.X + currentDialogSize.X > windowSize.X)
-                adjustedPos.X = windowSize.X - currentDialogSize.X - 10;
-            if (currentDialogPos.Y + currentDialogSize.Y > windowSize.Y)
-                adjustedPos.Y = windowSize.Y - currentDialogSize.Y - 10;
-            if (adjustedPos.X < 10)
-                adjustedPos.X = 10;
-            if (adjustedPos.Y < 10)
-                adjustedPos.Y = 10;
-            
-            if (adjustedPos.X != currentDialogPos.X || adjustedPos.Y != currentDialogPos.Y)
-                ImGui.SetWindowPos(adjustedPos);
-            
-            var selectedObject = _selectedObjectIndex >= 0 && _selectedObjectIndex < _sceneObjects.Count 
-                ? _sceneObjects[_selectedObjectIndex] 
-                : null;
-
-            if (selectedObject != null)
+            // Check for outside clicks and close dialog if needed
+            if (_currentDialog.CheckOutsideClick())
             {
-                ImGui.Text("DELETE OBJECT");
-                ImGui.Separator();
-                ImGui.Text($"Are you sure you want to delete '{selectedObject.Name}'?");
-                ImGui.Spacing();
-                
-                // Center buttons
-                float buttonWidth = 80.0f;
-                float spacing = ImGui.GetStyle().ItemSpacing.X;
-                float totalWidth = buttonWidth * 2 + spacing;
-                float windowWidth = ImGui.GetWindowSize().X;
-                ImGui.SetCursorPosX((windowWidth - totalWidth) * 0.5f);
-                
-                // Manual button handling with hover detection
-                var yesButtonPos = ImGui.GetCursorScreenPos();
-                var yesButtonSize = new Vector2(buttonWidth, ImGui.GetFrameHeight());
-                
-                bool yesClicked = false;
-                bool yesHovered = false;
-                
-                // Check if mouse is over Yes button
-                var mousePos = ImGui.GetMousePos();
-                if (mousePos.X >= yesButtonPos.X && mousePos.X <= yesButtonPos.X + yesButtonSize.X &&
-                    mousePos.Y >= yesButtonPos.Y && mousePos.Y <= yesButtonPos.Y + yesButtonSize.Y)
-                {
-                    yesHovered = true;
-                    if (ImGui.IsMouseDown(ImGuiMouseButton.Left))
-                    {
-                        if (!_yesButtonWasDown)
-                        {
-                            _yesButtonWasDown = true;
-                        }
-                    }
-                    else if (_yesButtonWasDown)
-                    {
-                        yesClicked = true;
-                        _yesButtonWasDown = false;
-                    }
-                }
-                else
-                {
-                    _yesButtonWasDown = false;
-                }
-                
-                // Draw Yes button with hover state
-                ImGui.PushStyleColor(ImGuiCol.Button, yesHovered ? new Vector4(0.8f, 0.2f, 0.2f, 1.0f) : new Vector4(0.6f, 0.1f, 0.1f, 1.0f));
-                ImGui.Button("Yes", yesButtonSize);
-                ImGui.PopStyleColor();
-                
-                if (yesClicked)
-                {
-                    DeleteSelectedObject();
-                    _showDeleteConfirmation = false;
-                }
-                
-                ImGui.SameLine();
-                
-                // Manual button handling for No button
-                var noButtonPos = ImGui.GetCursorScreenPos();
-                var noButtonSize = new Vector2(buttonWidth, ImGui.GetFrameHeight());
-                
-                bool noClicked = false;
-                bool noHovered = false;
-                
-                // Check if mouse is over No button
-                if (mousePos.X >= noButtonPos.X && mousePos.X <= noButtonPos.X + noButtonSize.X &&
-                    mousePos.Y >= noButtonPos.Y && mousePos.Y <= noButtonPos.Y + noButtonSize.Y)
-                {
-                    noHovered = true;
-                    if (ImGui.IsMouseDown(ImGuiMouseButton.Left))
-                    {
-                        if (!_noButtonWasDown)
-                        {
-                            _noButtonWasDown = true;
-                        }
-                    }
-                    else if (_noButtonWasDown)
-                    {
-                        noClicked = true;
-                        _noButtonWasDown = false;
-                    }
-                }
-                else
-                {
-                    _noButtonWasDown = false;
-                }
-                
-                // Draw No button with hover state
-                ImGui.PushStyleColor(ImGuiCol.Button, noHovered ? new Vector4(0.4f, 0.4f, 0.4f, 1.0f) : new Vector4(0.3f, 0.3f, 0.3f, 1.0f));
-                ImGui.Button("No", noButtonSize);
-                ImGui.PopStyleColor();
-                
-                if (noClicked)
-                {
-                    _showDeleteConfirmation = false;
-                }
+                _currentDialog = null;
             }
-            else
+            // Remove dialog if it's no longer visible (only check if dialog still exists)
+            else if (!_currentDialog.IsVisible)
             {
-                ImGui.Text("No object selected for deletion.");
-                ImGui.Spacing();
-                
-                float buttonWidth = 60.0f;
-                float windowWidth = ImGui.GetWindowSize().X;
-                ImGui.SetCursorPosX((windowWidth - buttonWidth) * 0.5f);
-                
-                if (ImGui.Button("OK", new Vector2(buttonWidth, 0)))
-                {
-                    _showDeleteConfirmation = false;
-                }
+                _currentDialog = null;
             }
         }
-        ImGui.End();
-        ImGui.PopStyleColor(2);
     }
 
     private void DeleteSelectedObject()
@@ -855,6 +762,11 @@ public class SimpleUIRenderer : IDisposable
             _gl.DeleteProgram(_shaderProgram);
             _gl.DeleteTexture(_fontTexture);
             
+            // Clean up viewport framebuffer resources
+            _gl.DeleteFramebuffer(_viewportFramebuffer);
+            _gl.DeleteTexture(_viewportTexture);
+            _gl.DeleteRenderbuffer(_viewportDepthBuffer);
+            
             // Clean up 3D viewport resources
             _viewport3D?.Dispose();
             
@@ -872,6 +784,8 @@ public class SimpleUIRenderer : IDisposable
         _inputContext?.Dispose();
         _gl?.Dispose();
     }
+
+
 
     private void SpawnCube()
     {
