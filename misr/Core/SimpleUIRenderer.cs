@@ -8,6 +8,9 @@ using System.Reflection;
 using Misr.UI;
 using Misr.Rendering;
 using Misr.Core;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Diagnostics;
 
 namespace Misr;
 
@@ -80,6 +83,21 @@ public class SimpleUIRenderer : IDisposable
     // Dialog system
     private Dialog? _currentDialog = null;
     private bool _viewportWasHovered = false;
+    
+    // Render to file system
+    private bool _shouldRenderToFile = false;
+    private int _renderWidth = 0;
+    private int _renderHeight = 0;
+    private string _renderFilePath = "";
+    
+    // Animation rendering system
+    private bool _shouldRenderAnimation = false;
+    private int _animationWidth = 0;
+    private int _animationHeight = 0;
+    private int _animationFramerate = 30;
+    private int _animationBitrate = 10000;
+    private string _animationFormat = "";
+    private string _animationFilePath = "";
 
 
     public SimpleUIRenderer(IWindow window)
@@ -184,6 +202,14 @@ public class SimpleUIRenderer : IDisposable
                 if (key == Key.E) _ePressed = true;
                 if (key == Key.Q) _qPressed = true;
                 if (key == Key.F7) SpawnCube();
+                if (key == Key.F12) 
+                {
+                    var currentIo = ImGui.GetIO();
+                    if (currentIo.KeyCtrl)
+                        ShowRenderAnimationDialog();
+                    else
+                        ShowRenderSettingsDialog();
+                }
                 if (key == Key.Delete) 
                 {
                     if (_timeline.HasSelectedKeyframe() && _timeline.IsHovered)
@@ -282,7 +308,7 @@ public class SimpleUIRenderer : IDisposable
         _gl.TexParameterI(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Linear);
         _gl.TexParameterI(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Linear);
         _gl.PixelStore(PixelStoreParameter.UnpackRowLength, 0);
-        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba, (uint)width, (uint)height, 0, PixelFormat.Rgba, PixelType.UnsignedByte, pixels.ToPointer());
+        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba, (uint)width, (uint)height, 0, Silk.NET.OpenGL.PixelFormat.Rgba, PixelType.UnsignedByte, pixels.ToPointer());
 
         // Store the texture identifier
         io.Fonts.SetTexID((IntPtr)_fontTexture);
@@ -298,7 +324,7 @@ public class SimpleUIRenderer : IDisposable
         // Create color texture
         _viewportTexture = _gl.GenTexture();
         _gl.BindTexture(TextureTarget.Texture2D, _viewportTexture);
-        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgb, 1024, 768, 0, PixelFormat.Rgb, PixelType.UnsignedByte, (void*)0);
+        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgb, 1024, 768, 0, Silk.NET.OpenGL.PixelFormat.Rgb, PixelType.UnsignedByte, (void*)0);
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Linear);
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Linear);
         _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, TextureTarget.Texture2D, _viewportTexture, 0);
@@ -332,7 +358,7 @@ public class SimpleUIRenderer : IDisposable
         
         // Resize texture if needed
         _gl.BindTexture(TextureTarget.Texture2D, _viewportTexture);
-        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgb, newWidth, newHeight, 0, PixelFormat.Rgb, PixelType.UnsignedByte, (void*)0);
+        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgb, newWidth, newHeight, 0, Silk.NET.OpenGL.PixelFormat.Rgb, PixelType.UnsignedByte, (void*)0);
         
         // Resize depth buffer if needed
         _gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _viewportDepthBuffer);
@@ -448,6 +474,20 @@ public class SimpleUIRenderer : IDisposable
         
         // Render 3D scene to framebuffer texture
         Render3DToTexture();
+        
+        // Check if we should render to file
+        if (_shouldRenderToFile)
+        {
+            _shouldRenderToFile = false;
+            RenderSceneToFile(_renderWidth, _renderHeight, _renderFilePath);
+        }
+        
+        // Check if we should render animation
+        if (_shouldRenderAnimation)
+        {
+            _shouldRenderAnimation = false;
+            RenderAnimationToFile(_animationWidth, _animationHeight, _animationFramerate, _animationBitrate, _animationFormat, _animationFilePath);
+        }
         
         // Check if application should exit after all rendering is complete
         if (_menuBar.ShouldExit)
@@ -607,9 +647,26 @@ public class SimpleUIRenderer : IDisposable
         // Render menu bar normally in main UI pass (3D is now a texture)
         _menuBar.Render();
         
-        // Render current dialog in main UI pass (will appear on top of texture)
+        // Check if render settings dialog should be shown
+        if (_menuBar.ShouldShowRenderSettings)
+        {
+            RenderDialogInputBlocker(new Vector2(windowSize.X, windowSize.Y));
+            ShowRenderSettingsDialog();
+        }
+        
+        // Check if render animation dialog should be shown
+        if (_menuBar.ShouldShowRenderAnimation)
+        {
+            ShowRenderAnimationDialog();
+        }
+        
+        // Render dialog overlay and current dialog in main UI pass
         if (_currentDialog != null)
         {
+            // Render overlay first
+            RenderDialogOverlay(new Vector2(windowSize.X, windowSize.Y));
+            
+            // Finally render the dialog on top
             _currentDialog.Render(new Vector2(windowSize.X, windowSize.Y));
             
             // Check for outside clicks and close dialog if needed
@@ -804,5 +861,483 @@ public class SimpleUIRenderer : IDisposable
         
         // Reset timeline frame for new object
         _timeline.CurrentFrame = 0;
+    }
+
+    private void ShowRenderSettingsDialog()
+    {
+        if (_currentDialog == null)
+        {
+            var io = ImGui.GetIO();
+            var centerPos = new Vector2(io.DisplaySize.X * 0.5f - 150, io.DisplaySize.Y * 0.5f - 100);
+            
+            _currentDialog = new Dialog(
+                DialogType.RenderSettings,
+                "RENDER SETTINGS",
+                "",
+                centerPos,
+                () => { Console.WriteLine("Render frame started with selected settings"); },
+                () => { /* Cancel - no action needed */ },
+                (width, height, filePath) => { 
+                    Console.WriteLine($"[DEBUG] Setting render flags: {width}x{height} -> {filePath}");
+                    _shouldRenderToFile = true;
+                    _renderWidth = width;
+                    _renderHeight = height;
+                    _renderFilePath = filePath;
+                }
+            );
+        }
+    }
+
+    private void ShowRenderAnimationDialog()
+    {
+        if (_currentDialog == null)
+        {
+            var io = ImGui.GetIO();
+            var centerPos = new Vector2(io.DisplaySize.X * 0.5f - 200, io.DisplaySize.Y * 0.5f - 150);
+            
+            _currentDialog = new Dialog(
+                DialogType.RenderAnimation,
+                "RENDER ANIMATION",
+                "",
+                centerPos,
+                () => { Console.WriteLine("Render animation started with selected settings"); },
+                () => { /* Cancel - no action needed */ },
+                null, // No single frame render callback for animation dialog
+                (width, height, framerate, bitrate, format, filePath) => { 
+                    Console.WriteLine($"[DEBUG] Setting animation render flags: {width}x{height}, {framerate}fps, {bitrate}kbps, {format} -> {filePath}");
+                    _shouldRenderAnimation = true;
+                    _animationWidth = width;
+                    _animationHeight = height;
+                    _animationFramerate = framerate;
+                    _animationBitrate = bitrate;
+                    _animationFormat = format;
+                    _animationFilePath = filePath;
+                }
+            );
+        }
+    }
+
+    private void RenderDialogOverlay(Vector2 windowSize)
+    {
+        // Create a fullscreen overlay - just provides the dark visual background
+        ImGui.SetNextWindowPos(Vector2.Zero);
+        ImGui.SetNextWindowSize(windowSize);
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, new Vector4(0.0f, 0.0f, 0.0f, 0.5f)); // Semi-transparent black overlay
+        
+        if (ImGui.Begin("##DialogOverlay", ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove | 
+                       ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoTitleBar | 
+                       ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoInputs))
+        {
+            // Overlay just provides visual background - no input blocking
+        }
+        ImGui.End();
+        ImGui.PopStyleColor();
+    }
+
+    private void RenderDialogInputBlocker(Vector2 windowSize)
+    {
+        // Create a fullscreen invisible input blocker
+        ImGui.SetNextWindowPos(Vector2.Zero);
+        ImGui.SetNextWindowSize(windowSize);
+        if (ImGui.Begin("##DialogInputBlocker", ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove | 
+                       ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoTitleBar | 
+                       ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoBackground))
+        {
+            // Invisible button that captures all input to block UI behind the dialog
+            ImGui.InvisibleButton("##InputBlocker", windowSize);
+        }
+        ImGui.End();
+    }
+
+    private unsafe void RenderSceneToFile(int width, int height, string filePath)
+    {
+        try
+        {
+            // Create temporary framebuffer for high-res rendering
+            uint renderFramebuffer = _gl.GenFramebuffer();
+            uint renderTexture = _gl.GenTexture();
+            uint renderDepthBuffer = _gl.GenRenderbuffer();
+            
+            if (renderFramebuffer == 0 || renderTexture == 0 || renderDepthBuffer == 0)
+            {
+                return;
+            }
+            
+            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, renderFramebuffer);
+            
+            // Create color texture
+            _gl.BindTexture(TextureTarget.Texture2D, renderTexture);
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgb, (uint)width, (uint)height, 0, Silk.NET.OpenGL.PixelFormat.Rgb, PixelType.UnsignedByte, (void*)0);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Linear);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Linear);
+            _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, TextureTarget.Texture2D, renderTexture, 0);
+            
+            // Create depth buffer
+            _gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, renderDepthBuffer);
+            _gl.RenderbufferStorage(RenderbufferTarget.Renderbuffer, InternalFormat.DepthComponent, (uint)width, (uint)height);
+            _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, RenderbufferTarget.Renderbuffer, renderDepthBuffer);
+            
+            // Check framebuffer completeness
+            var fbStatus = _gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
+            if (fbStatus != GLEnum.FramebufferComplete)
+            {
+                return;
+            }
+            
+            // Set viewport and render the scene
+            _gl.Viewport(0, 0, (uint)width, (uint)height);
+            _viewport3D.Render(Vector2.Zero, new Vector2(width, height), height, false); // Disable UI elements for file render
+            
+            // Read pixels from framebuffer
+            byte[] pixels = new byte[width * height * 3]; // RGB
+            fixed (byte* pixelPtr = pixels)
+            {
+                _gl.ReadPixels(0, 0, (uint)width, (uint)height, Silk.NET.OpenGL.PixelFormat.Rgb, PixelType.UnsignedByte, pixelPtr);
+            }
+            
+            // Save to file
+            SaveImageToFile(pixels, width, height, filePath);
+            
+            // Clean up temporary framebuffer
+            _gl.DeleteFramebuffer(renderFramebuffer);
+            _gl.DeleteTexture(renderTexture);
+            _gl.DeleteRenderbuffer(renderDepthBuffer);
+            
+            // Restore original viewport
+            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+            _gl.Viewport(0, 0, (uint)_window.Size.X, (uint)_window.Size.Y);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error during render: {ex.Message}");
+        }
+    }
+
+    private void SaveImageToFile(byte[] pixels, int width, int height, string filePath)
+    {
+        try
+        {
+            // Flip the image vertically (OpenGL reads bottom-to-top, but images are top-to-bottom)
+            byte[] flippedPixels = new byte[pixels.Length];
+            int rowSize = width * 3;
+            for (int y = 0; y < height; y++)
+            {
+                int srcRow = (height - 1 - y) * rowSize;
+                int dstRow = y * rowSize;
+                Array.Copy(pixels, srcRow, flippedPixels, dstRow, rowSize);
+            }
+            
+            // Determine file format from extension
+            string extension = Path.GetExtension(filePath).ToLower();
+            
+            using var bitmap = new Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+            var bitmapData = bitmap.LockBits(new Rectangle(0, 0, width, height), 
+                ImageLockMode.WriteOnly, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+            
+            unsafe
+            {
+                byte* bmpPtr = (byte*)bitmapData.Scan0;
+                for (int i = 0; i < flippedPixels.Length; i += 3)
+                {
+                    // Convert RGB to BGR for bitmap
+                    bmpPtr[i] = flippedPixels[i + 2];     // B
+                    bmpPtr[i + 1] = flippedPixels[i + 1]; // G
+                    bmpPtr[i + 2] = flippedPixels[i];     // R
+                }
+            }
+            
+            bitmap.UnlockBits(bitmapData);
+            
+            // Save in appropriate format
+            switch (extension)
+            {
+                case ".png":
+                    bitmap.Save(filePath, ImageFormat.Png);
+                    break;
+                case ".jpg":
+                case ".jpeg":
+                    bitmap.Save(filePath, ImageFormat.Jpeg);
+                    break;
+                case ".bmp":
+                    bitmap.Save(filePath, ImageFormat.Bmp);
+                    break;
+                default:
+                    bitmap.Save(filePath, ImageFormat.Png); // Default to PNG
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error saving image: {ex.Message}");
+        }
+    }
+
+    private async void RenderAnimationToFile(int width, int height, int framerate, int bitrate, string format, string filePath)
+    {
+        try
+        {
+            bool isPngSequence = format == "PNG Sequence";
+            
+            if (isPngSequence)
+            {
+                // For PNG sequence, just save the current frame with the selected name
+                RenderSceneToFile(width, height, filePath);
+            }
+            else
+            {
+                // For video formats, render all frames and use FFmpeg
+                await RenderVideoWithFFmpeg(width, height, framerate, bitrate, format, filePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error during animation render: {ex.Message}");
+        }
+    }
+
+    private async Task RenderVideoWithFFmpeg(int width, int height, int framerate, int bitrate, string format, string filePath)
+    {
+        try
+        {
+            // Create temporary directory for frames
+            string tempDir = Path.Combine(Path.GetTempPath(), $"misr_render_{DateTime.Now:yyyyMMdd_HHmmss}");
+            Directory.CreateDirectory(tempDir);
+            
+            // Get last keyframe position across all objects
+            int lastKeyframe = GetLastKeyframePosition();
+            if (lastKeyframe <= 0)
+            {
+                lastKeyframe = 0; // Render at least frame 0
+            }
+            
+            int framesToRender = lastKeyframe + 1; // Include frame 0
+            
+            // Store current timeline state
+            int originalFrame = _timeline.CurrentFrame;
+            bool wasPlaying = _timeline.IsPlaying;
+            if (wasPlaying) _timeline.IsPlaying = false;
+            
+            // Render each frame
+            for (int frame = 0; frame < framesToRender; frame++)
+            {
+                // Set timeline to this frame
+                _timeline.CurrentFrame = frame;
+                
+                // Update object transforms for this frame
+                foreach (var obj in _sceneObjects)
+                {
+                    if (_timeline.HasKeyframes(obj))
+                    {
+                        obj.Position = _timeline.GetAnimatedPosition(obj);
+                        obj.Rotation = _timeline.GetAnimatedRotation(obj);
+                        obj.Scale = _timeline.GetAnimatedScale(obj);
+                    }
+                }
+                
+                // Render frame to temporary file
+                string frameFile = Path.Combine(tempDir, $"frame_{frame:D6}.png");
+                RenderSceneToFile(width, height, frameFile);
+            }
+            
+            // Restore timeline state
+            _timeline.CurrentFrame = originalFrame;
+            if (wasPlaying) _timeline.IsPlaying = true;
+            
+            // Verify frames were created before encoding
+            var frameFiles = Directory.GetFiles(tempDir, "frame_*.png");
+            if (frameFiles.Length == 0)
+            {
+                return;
+            }
+            
+            // Use FFmpeg to encode video
+            await EncodeVideoWithFFmpeg(tempDir, width, height, framerate, bitrate, format, filePath);
+            
+            // Clean up temporary directory
+            Directory.Delete(tempDir, true);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error in video render: {ex.Message}");
+        }
+    }
+
+    private async Task EncodeVideoWithFFmpeg(string frameDir, int width, int height, int framerate, int bitrate, string format, string outputPath)
+    {
+        try
+        {
+            // Get FFmpeg executable path from new location
+            string ffmpegPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data", "lib", "ffmpeg", "ffmpeg.exe");
+            
+            if (!File.Exists(ffmpegPath))
+            {
+                Console.WriteLine($"ERROR: FFmpeg not found at {ffmpegPath}");
+                return;
+            }
+            
+            // Test FFmpeg first
+            await TestFFmpegVersion(ffmpegPath);
+            
+            // Build FFmpeg command based on format
+            string inputPattern = Path.Combine(frameDir, "frame_%06d.png").Replace("\\", "/"); // FFmpeg prefers forward slashes
+            string codec, extension;
+            
+            switch (format.ToUpper())
+            {
+                case "MP4":
+                    codec = "libx264";
+                    extension = ".mp4";
+                    break;
+                case "MOV":
+                    codec = "libx264";
+                    extension = ".mov";
+                    break;
+                case "WMV":
+                    codec = "wmv2";
+                    extension = ".wmv";
+                    break;
+                default:
+                    codec = "libx264";
+                    extension = ".mp4";
+                    break;
+            }
+            
+            // Ensure output file has correct extension
+            if (!outputPath.ToLower().EndsWith(extension))
+            {
+                outputPath = Path.ChangeExtension(outputPath, extension);
+            }
+            
+            string ffmpegArgs = $"-y -framerate {framerate} -i \"{inputPattern}\" -c:v {codec} -b:v {bitrate}k -pix_fmt yuv420p \"{outputPath}\"";
+            
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = ffmpegPath,
+                WorkingDirectory = Path.GetDirectoryName(ffmpegPath), // Set working directory to FFmpeg folder with DLLs
+                Arguments = ffmpegArgs,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            
+            using var process = Process.Start(startInfo);
+            if (process != null)
+            {
+                var output = await process.StandardOutput.ReadToEndAsync();
+                var error = await process.StandardError.ReadToEndAsync();
+                await process.WaitForExitAsync();
+                
+                if (process.ExitCode != 0)
+                {
+                    Console.WriteLine($"Video encoding failed with exit code: {process.ExitCode}");
+                    if (!string.IsNullOrEmpty(error))
+                        Console.WriteLine($"FFmpeg error: {error}");
+                    
+                    // Try fallback command for compatibility
+                    await TryFallbackFFmpegCommand(frameDir, framerate, outputPath);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error encoding video: {ex.Message}");
+        }
+    }
+
+    private int GetLastKeyframePosition()
+    {
+        int maxKeyframe = 0;
+        
+        foreach (var obj in _sceneObjects)
+        {
+            foreach (var frame in obj.PosXKeyframes.Keys) maxKeyframe = Math.Max(maxKeyframe, frame);
+            foreach (var frame in obj.PosYKeyframes.Keys) maxKeyframe = Math.Max(maxKeyframe, frame);
+            foreach (var frame in obj.PosZKeyframes.Keys) maxKeyframe = Math.Max(maxKeyframe, frame);
+            foreach (var frame in obj.RotXKeyframes.Keys) maxKeyframe = Math.Max(maxKeyframe, frame);
+            foreach (var frame in obj.RotYKeyframes.Keys) maxKeyframe = Math.Max(maxKeyframe, frame);
+            foreach (var frame in obj.RotZKeyframes.Keys) maxKeyframe = Math.Max(maxKeyframe, frame);
+            foreach (var frame in obj.ScaleXKeyframes.Keys) maxKeyframe = Math.Max(maxKeyframe, frame);
+            foreach (var frame in obj.ScaleYKeyframes.Keys) maxKeyframe = Math.Max(maxKeyframe, frame);
+            foreach (var frame in obj.ScaleZKeyframes.Keys) maxKeyframe = Math.Max(maxKeyframe, frame);
+        }
+        
+        return maxKeyframe;
+    }
+
+    private async Task TryFallbackFFmpegCommand(string frameDir, int framerate, string outputPath)
+    {
+        try
+        {
+            string ffmpegPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data", "lib", "ffmpeg", "ffmpeg.exe");
+            string inputPattern = Path.Combine(frameDir, "frame_%06d.png").Replace("\\", "/");
+            
+            // Simpler FFmpeg command without bitrate and specific codec settings
+            string fallbackArgs = $"-y -framerate {framerate} -i \"{inputPattern}\" -vcodec libx264 -preset medium \"{outputPath}\"";
+            
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = ffmpegPath,
+                WorkingDirectory = Path.GetDirectoryName(ffmpegPath), // Set working directory to FFmpeg folder
+                Arguments = fallbackArgs,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            
+            using var process = Process.Start(startInfo);
+            if (process != null)
+            {
+                var output = await process.StandardOutput.ReadToEndAsync();
+                var error = await process.StandardError.ReadToEndAsync();
+                await process.WaitForExitAsync();
+                
+                if (process.ExitCode != 0)
+                {
+                    Console.WriteLine($"Fallback video encoding also failed with exit code: {process.ExitCode}");
+                    if (!string.IsNullOrEmpty(error))
+                        Console.WriteLine($"Fallback FFmpeg error: {error}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error in fallback FFmpeg: {ex.Message}");
+        }
+    }
+
+    private async Task TestFFmpegVersion(string ffmpegPath)
+    {
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = ffmpegPath,
+                WorkingDirectory = Path.GetDirectoryName(ffmpegPath), // Set working directory to FFmpeg folder
+                Arguments = "-version",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            
+            using var process = Process.Start(startInfo);
+            if (process != null)
+            {
+                var output = await process.StandardOutput.ReadToEndAsync();
+                var error = await process.StandardError.ReadToEndAsync();
+                await process.WaitForExitAsync();
+                
+                if (process.ExitCode != 0)
+                {
+                    Console.WriteLine($"FFmpeg version test failed: {error}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error testing FFmpeg: {ex.Message}");
+        }
     }
 }

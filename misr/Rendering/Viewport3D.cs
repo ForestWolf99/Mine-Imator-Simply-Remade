@@ -668,7 +668,7 @@ void main()
         _modelMatrix = scaleMatrix * rotationMatrix * translationMatrix;
     }
 
-    public unsafe void Render(Vector2 viewportPos, Vector2 viewportSize, int windowHeight)
+    public unsafe void Render(Vector2 viewportPos, Vector2 viewportSize, int windowHeight, bool renderUIElements = true)
     {
         // Skip rendering if viewport is too small
         if (viewportSize.X <= 0 || viewportSize.Y <= 0) return;
@@ -772,8 +772,8 @@ void main()
             }
         }
 
-        // Render wireframe highlight for selected object
-        if (SelectedObjectIndex >= 0 && SelectedObjectIndex < SceneObjects.Count)
+        // Render wireframe highlight for selected object (only in UI mode)
+        if (renderUIElements && SelectedObjectIndex >= 0 && SelectedObjectIndex < SceneObjects.Count)
         {
             var selectedObj = SceneObjects[SelectedObjectIndex];
             if (selectedObj.HasMesh)
@@ -818,8 +818,8 @@ void main()
             }
         }
 
-        // Render transform gizmo for selected object
-        if (SelectedObjectIndex >= 0 && SelectedObjectIndex < SceneObjects.Count)
+        // Render transform gizmo for selected object (only in UI mode)
+        if (renderUIElements && SelectedObjectIndex >= 0 && SelectedObjectIndex < SceneObjects.Count)
         {
             var selectedObj = SceneObjects[SelectedObjectIndex];
             if (selectedObj.HasMesh)

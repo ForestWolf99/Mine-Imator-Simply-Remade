@@ -7,6 +7,8 @@ public class MenuBar
 {
     private readonly IWindow _window;
     private bool _shouldExit = false;
+    private bool _shouldShowRenderSettings = false;
+    private bool _shouldShowRenderAnimation = false;
 
     public MenuBar(IWindow window)
     {
@@ -14,6 +16,24 @@ public class MenuBar
     }
 
     public bool ShouldExit => _shouldExit;
+    public bool ShouldShowRenderSettings
+    {
+        get
+        {
+            var result = _shouldShowRenderSettings;
+            _shouldShowRenderSettings = false; // Reset after reading
+            return result;
+        }
+    }
+    public bool ShouldShowRenderAnimation
+    {
+        get
+        {
+            var result = _shouldShowRenderAnimation;
+            _shouldShowRenderAnimation = false; // Reset after reading
+            return result;
+        }
+    }
 
     public void Render()
     {
@@ -88,11 +108,11 @@ public class MenuBar
             {
                 if (ImGui.MenuItem("Render Frame", "F12"))
                 {
-                    // TODO: Implement render current frame
+                    _shouldShowRenderSettings = true;
                 }
                 if (ImGui.MenuItem("Render Animation", "Ctrl+F12"))
                 {
-                    // TODO: Implement render animation
+                    _shouldShowRenderAnimation = true;
                 }
                 ImGui.Separator();
                 if (ImGui.MenuItem("Render Settings"))

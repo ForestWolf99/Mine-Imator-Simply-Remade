@@ -349,8 +349,7 @@ FodyWeavers.xsd
 *.sln.iml
 
 # FFmpeg binaries (downloaded automatically during build)
-ffmpeg.exe
-ffmpeg
+ffmpeg-bin
 
 # Agent configuration file (user-specific)
 AGENT.md

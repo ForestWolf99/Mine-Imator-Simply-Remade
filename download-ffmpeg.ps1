@@ -36,22 +36,25 @@ try {
     }
     Expand-Archive -Path $zipPath -DestinationPath $extractPath
     
-    # Find ffmpeg.exe in the extracted files
-    $ffmpegExe = Get-ChildItem -Path $extractPath -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
+    # Find ffmpeg bin directory in the extracted files
+    $binDir = Get-ChildItem -Path $extractPath -Name "bin" -Recurse -Directory | Select-Object -First 1
     
-    if (-not $ffmpegExe) {
-        Write-Error "Could not find ffmpeg.exe in the extracted files"
+    if (-not $binDir) {
+        Write-Error "Could not find bin directory in the extracted files"
         exit 1
     }
     
-    $ffmpegPath = $ffmpegExe.FullName
-    $targetPath = Join-Path (Get-Location) "ffmpeg.exe"
+    $ffmpegBinPath = Join-Path $extractPath $binDir
+    $targetBinPath = Join-Path (Get-Location) "ffmpeg-bin"
     
-    # Copy ffmpeg.exe to project root
-    Write-Host "Copying ffmpeg.exe to project root..." -ForegroundColor Yellow
-    Copy-Item $ffmpegPath $targetPath -Force
+    # Copy entire bin directory to project root
+    Write-Host "Copying FFmpeg bin directory to project root..." -ForegroundColor Yellow
+    if (Test-Path $targetBinPath) {
+        Remove-Item $targetBinPath -Recurse -Force
+    }
+    Copy-Item $ffmpegBinPath $targetBinPath -Recurse -Force
     
-    Write-Host "Successfully downloaded ffmpeg.exe to project root!" -ForegroundColor Green
+    Write-Host "Successfully downloaded FFmpeg with dependencies to ffmpeg-bin folder!" -ForegroundColor Green
     
 } finally {
     # Cleanup temporary files

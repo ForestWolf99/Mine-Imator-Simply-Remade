@@ -37,18 +37,22 @@ echo "Extracting archive..."
 cd "$TEMP_DIR"
 tar -xJf "$TAR_PATH"
 
-# Find ffmpeg binary in the extracted files
-FFMPEG_BIN=$(find . -name "ffmpeg" -type f | head -1)
+# Find ffmpeg bin directory in the extracted files
+BIN_DIR=$(find . -name "bin" -type d | head -1)
 
-if [ -z "$FFMPEG_BIN" ]; then
-    echo "Error: Could not find ffmpeg binary in the extracted files" >&2
+if [ -z "$BIN_DIR" ]; then
+    echo "Error: Could not find bin directory in the extracted files" >&2
     exit 1
 fi
 
-# Copy ffmpeg to project root
-echo "Copying ffmpeg to project root..."
-cp "$FFMPEG_BIN" "$(pwd)/ffmpeg"
-chmod +x "$(pwd)/ffmpeg"
+# Copy entire bin directory to project root
+echo "Copying FFmpeg bin directory to project root..."
+CURRENT_DIR=$(pwd)
+cd "$(dirname "$0")"
+if [ -d "ffmpeg-bin" ]; then
+    rm -rf "ffmpeg-bin"
+fi
+cp -r "$TEMP_DIR/$BIN_DIR" "ffmpeg-bin"
 
-echo "Successfully downloaded ffmpeg to project root!"
+echo "Successfully downloaded FFmpeg with dependencies to ffmpeg-bin folder!"
 echo "Done!"
