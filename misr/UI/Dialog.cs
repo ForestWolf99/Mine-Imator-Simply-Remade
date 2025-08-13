@@ -12,7 +12,8 @@ public enum DialogType
     YesNoConfirmation,
     Information,
     RenderSettings,
-    RenderAnimation
+    RenderAnimation,
+    RenderProgress
 }
 
 public class Dialog
@@ -56,6 +57,13 @@ public class Dialog
     private readonly string[] _videoFormatOptions = { "MP4", "MOV", "WMV", "PNG Sequence" };
     private int _bitrate = 10000; // kbps
     private int _framerate = 30;
+    
+    // Progress tracking state
+    private int _currentFrame = 0;
+    private int _totalFrames = 0;
+    private float _encodingProgress = 0.0f;
+    private string _progressText = "";
+    private bool _isEncoding = false;
 
     public bool IsVisible { get; set; } = true;
     public DialogType Type => _type;
@@ -83,8 +91,8 @@ public class Dialog
         var flags = ImGuiWindowFlags.NoMove | 
                    ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoTitleBar;
         
-        // For render settings and animation dialogs, use fixed size instead of auto-resize
-        if (_type == DialogType.RenderSettings || _type == DialogType.RenderAnimation)
+        // For render settings, animation, and progress dialogs, use fixed size instead of auto-resize
+        if (_type == DialogType.RenderSettings || _type == DialogType.RenderAnimation || _type == DialogType.RenderProgress)
         {
             ImGui.SetNextWindowSize(new Vector2(400, 0)); // Fixed width, auto height
             flags |= ImGuiWindowFlags.NoResize;
@@ -131,8 +139,8 @@ public class Dialog
     {
         if (!IsVisible) return false;
 
-        // Render settings and animation dialogs should not close on outside clicks
-        if (_type == DialogType.RenderSettings || _type == DialogType.RenderAnimation) return false;
+        // Render settings, animation, and progress dialogs should not close on outside clicks
+        if (_type == DialogType.RenderSettings || _type == DialogType.RenderAnimation || _type == DialogType.RenderProgress) return false;
 
         // Check for clicks outside dialog bounds (with 5 pixel buffer)
         var mousePos = ImGui.GetMousePos();
@@ -168,6 +176,9 @@ public class Dialog
                 break;
             case DialogType.RenderAnimation:
                 RenderRenderAnimation();
+                break;
+            case DialogType.RenderProgress:
+                RenderRenderProgress();
                 break;
         }
     }
@@ -734,6 +745,79 @@ public class Dialog
         catch (Exception ex)
         {
             Console.WriteLine($"Error showing animation save dialog: {ex.Message}");
+        }
+    }
+
+    public void UpdateFrameProgress(int currentFrame, int totalFrames)
+    {
+        _currentFrame = currentFrame;
+        _totalFrames = totalFrames;
+        _progressText = $"Rendering frame {currentFrame}/{totalFrames}";
+        _isEncoding = false;
+    }
+
+    public void UpdateEncodingProgress(float progress)
+    {
+        _encodingProgress = progress;
+        _progressText = $"Encoding video... {progress:F1}%";
+        _isEncoding = true;
+    }
+
+    private void RenderRenderProgress()
+    {
+        var windowWidth = ImGui.GetWindowSize().X;
+        
+        // Center the title
+        var titleText = _isEncoding ? "ENCODING VIDEO" : "RENDERING ANIMATION";
+        var titleWidth = ImGui.CalcTextSize(titleText).X;
+        ImGui.SetCursorPosX((windowWidth - titleWidth) * 0.5f);
+        ImGui.Text(titleText);
+        ImGui.Separator();
+        ImGui.Spacing();
+        
+        // Center the progress text
+        var progressTextWidth = ImGui.CalcTextSize(_progressText).X;
+        ImGui.SetCursorPosX((windowWidth - progressTextWidth) * 0.5f);
+        ImGui.Text(_progressText);
+        ImGui.Spacing();
+        
+        // Progress bars
+        if (_isEncoding)
+        {
+            // Encoding progress bar
+            var encodingBarWidth = 300f;
+            ImGui.SetCursorPosX((windowWidth - encodingBarWidth) * 0.5f);
+            ImGui.ProgressBar(_encodingProgress / 100.0f, new Vector2(encodingBarWidth, 0), $"{_encodingProgress:F1}%");
+        }
+        else
+        {
+            // Frame rendering progress bar
+            var frameProgress = _totalFrames > 0 ? (float)_currentFrame / _totalFrames : 0.0f;
+            var frameBarWidth = 300f;
+            ImGui.SetCursorPosX((windowWidth - frameBarWidth) * 0.5f);
+            ImGui.ProgressBar(frameProgress, new Vector2(frameBarWidth, 0), $"{_currentFrame}/{_totalFrames}");
+        }
+        
+        ImGui.Spacing();
+        ImGui.Spacing();
+        
+        // Cancel button (only show if not encoding - can't safely cancel during FFmpeg)
+        if (!_isEncoding)
+        {
+            float buttonWidth = 80.0f;
+            ImGui.SetCursorPosX((windowWidth - buttonWidth) * 0.5f);
+            
+            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.6f, 0.1f, 0.1f, 1.0f));
+            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.8f, 0.2f, 0.2f, 1.0f));
+            ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.9f, 0.3f, 0.3f, 1.0f));
+            
+            if (ImGui.Button("Cancel", new Vector2(buttonWidth, 0)))
+            {
+                _onNo?.Invoke();
+                IsVisible = false;
+            }
+            
+            ImGui.PopStyleColor(3);
         }
     }
 }

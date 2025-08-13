@@ -50,6 +50,9 @@ public class SimpleUIRenderer : IDisposable
     // Texture atlas
     private TextureAtlas _textureAtlas = null!;
     
+    // Bench button texture
+    private uint _benchTexture = 0;
+    
     // Timeline
     private Timeline _timeline = null!;
     
@@ -82,6 +85,7 @@ public class SimpleUIRenderer : IDisposable
     
     // Dialog system
     private Dialog? _currentDialog = null;
+    private Dialog? _progressDialog = null;
     private bool _viewportWasHovered = false;
     
     // Render to file system
@@ -98,6 +102,7 @@ public class SimpleUIRenderer : IDisposable
     private int _animationBitrate = 10000;
     private string _animationFormat = "";
     private string _animationFilePath = "";
+    private bool _cancelAnimation = false;
 
 
     public SimpleUIRenderer(IWindow window)
@@ -141,6 +146,7 @@ public class SimpleUIRenderer : IDisposable
             CreateFontsTexture();
             CreateViewportFramebuffer();
             _textureAtlas.CreateTerrainAtlases();
+            LoadBenchTexture();
             _viewport3D.Initialize();
             
             _initialized = true;
@@ -640,6 +646,43 @@ public class SimpleUIRenderer : IDisposable
                 
                 _viewport3D.CameraPosition = currentPos;
             }
+            
+            // Add bench button overlay in top-left corner
+            if (_benchTexture != 0)
+            {
+                // Save current cursor position
+                var currentCursor = ImGui.GetCursorScreenPos();
+                
+                // Position button in top-left corner of viewport (with some padding)
+                var buttonPos = new Vector2(_viewportPosition.X + 10, _viewportPosition.Y + 10);
+                var buttonSize = new Vector2(64, 64); // Made larger
+                
+                // Set cursor to button position
+                ImGui.SetCursorScreenPos(buttonPos);
+                ImGui.Dummy(Vector2.Zero); // Validate cursor position
+                
+                // Check if mouse is hovering over button
+                var mousePos = ImGui.GetMousePos();
+                bool isHovered = mousePos.X >= buttonPos.X && mousePos.X <= buttonPos.X + buttonSize.X &&
+                                mousePos.Y >= buttonPos.Y && mousePos.Y <= buttonPos.Y + buttonSize.Y;
+                
+                // Add invisible button to check click state without affecting visual positioning
+                if (ImGui.InvisibleButton("##benchButtonHitbox", buttonSize))
+                {
+                    Console.WriteLine("Bench button clicked!");
+                }
+                
+                // Manually render the texture at the button position with flipped UV coordinates
+                var drawList = ImGui.GetWindowDrawList();
+                var tintColor = isHovered ? 0xFFFFFFFF : 0x4DFFFFFF; // Full opacity when hovered, 30% opacity otherwise
+                drawList.AddImage((IntPtr)_benchTexture, buttonPos, 
+                    new Vector2(buttonPos.X + buttonSize.X, buttonPos.Y + buttonSize.Y),
+                    new Vector2(0, 1), new Vector2(1, 0), tintColor); // Flip Y coordinates and apply tint
+                
+                // Restore cursor position
+                ImGui.SetCursorScreenPos(currentCursor);
+                ImGui.Dummy(Vector2.Zero); // Validate cursor position
+            }
         }
         ImGui.End();
         ImGui.PopStyleColor();
@@ -678,6 +721,25 @@ public class SimpleUIRenderer : IDisposable
             else if (!_currentDialog.IsVisible)
             {
                 _currentDialog = null;
+            }
+        }
+        
+        // Render progress dialog if it exists
+        if (_progressDialog != null)
+        {
+            // Render overlay first
+            RenderDialogOverlay(new Vector2(windowSize.X, windowSize.Y));
+            
+            // Then render input blocker
+            RenderDialogInputBlocker(new Vector2(windowSize.X, windowSize.Y));
+            
+            // Finally render the progress dialog on top
+            _progressDialog.Render(new Vector2(windowSize.X, windowSize.Y));
+            
+            // Remove progress dialog if it's no longer visible
+            if (!_progressDialog.IsVisible)
+            {
+                _progressDialog = null;
             }
         }
     }
@@ -818,6 +880,9 @@ public class SimpleUIRenderer : IDisposable
             _gl.DeleteBuffer(_elementBuffer);
             _gl.DeleteProgram(_shaderProgram);
             _gl.DeleteTexture(_fontTexture);
+            
+            // Clean up bench texture
+            if (_benchTexture != 0) _gl.DeleteTexture(_benchTexture);
             
             // Clean up viewport framebuffer resources
             _gl.DeleteFramebuffer(_viewportFramebuffer);
@@ -1085,13 +1150,20 @@ public class SimpleUIRenderer : IDisposable
             }
             else
             {
+                // Show progress dialog for video rendering
+                ShowProgressDialog();
+                
                 // For video formats, render all frames and use FFmpeg
                 await RenderVideoWithFFmpeg(width, height, framerate, bitrate, format, filePath);
+                
+                // Hide progress dialog when complete
+                HideProgressDialog();
             }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error during animation render: {ex.Message}");
+            HideProgressDialog();
         }
     }
 
@@ -1120,6 +1192,16 @@ public class SimpleUIRenderer : IDisposable
             // Render each frame
             for (int frame = 0; frame < framesToRender; frame++)
             {
+                // Check for cancellation
+                if (_cancelAnimation)
+                {
+                    Console.WriteLine("Animation rendering cancelled by user");
+                    return;
+                }
+                
+                // Update progress
+                _progressDialog?.UpdateFrameProgress(frame + 1, framesToRender);
+                
                 // Set timeline to this frame
                 _timeline.CurrentFrame = frame;
                 
@@ -1150,8 +1232,11 @@ public class SimpleUIRenderer : IDisposable
                 return;
             }
             
+            // Update progress to encoding phase
+            _progressDialog?.UpdateEncodingProgress(0.0f);
+            
             // Use FFmpeg to encode video
-            await EncodeVideoWithFFmpeg(tempDir, width, height, framerate, bitrate, format, filePath);
+            await EncodeVideoWithFFmpeg(tempDir, width, height, framerate, bitrate, format, filePath, framesToRender);
             
             // Clean up temporary directory
             Directory.Delete(tempDir, true);
@@ -1162,7 +1247,7 @@ public class SimpleUIRenderer : IDisposable
         }
     }
 
-    private async Task EncodeVideoWithFFmpeg(string frameDir, int width, int height, int framerate, int bitrate, string format, string outputPath)
+    private async Task EncodeVideoWithFFmpeg(string frameDir, int width, int height, int framerate, int bitrate, string format, string outputPath, int totalFrames)
     {
         try
         {
@@ -1224,15 +1309,28 @@ public class SimpleUIRenderer : IDisposable
             using var process = Process.Start(startInfo);
             if (process != null)
             {
+                // Parse FFmpeg progress from stderr in real-time
+                var stderrTask = Task.Run(async () =>
+                {
+                    using var reader = process.StandardError;
+                    string? line;
+                    while ((line = await reader.ReadLineAsync()) != null)
+                    {
+                        ParseFFmpegProgress(line, totalFrames);
+                    }
+                });
+                
                 var output = await process.StandardOutput.ReadToEndAsync();
-                var error = await process.StandardError.ReadToEndAsync();
+                await stderrTask;
                 await process.WaitForExitAsync();
                 
-                if (process.ExitCode != 0)
+                if (process.ExitCode == 0)
+                {
+                    _progressDialog?.UpdateEncodingProgress(100.0f);
+                }
+                else
                 {
                     Console.WriteLine($"Video encoding failed with exit code: {process.ExitCode}");
-                    if (!string.IsNullOrEmpty(error))
-                        Console.WriteLine($"FFmpeg error: {error}");
                     
                     // Try fallback command for compatibility
                     await TryFallbackFFmpegCommand(frameDir, framerate, outputPath);
@@ -1263,6 +1361,46 @@ public class SimpleUIRenderer : IDisposable
         }
         
         return maxKeyframe;
+    }
+
+    private unsafe void LoadBenchTexture()
+    {
+        try
+        {
+            var assembly = Assembly.GetExecutingAssembly();
+            using var stream = assembly.GetManifestResourceStream("misr.assets.sprite.bench.png");
+            
+            if (stream == null)
+            {
+                Console.WriteLine("Failed to load bench.png - resource not found");
+                return;
+            }
+            
+            // Load the PNG data with StbImageSharp
+            var imageResult = ImageResult.FromStream(stream, ColorComponents.RedGreenBlueAlpha);
+            
+            // Create OpenGL texture
+            _benchTexture = _gl.GenTexture();
+            _gl.BindTexture(TextureTarget.Texture2D, _benchTexture);
+            
+            fixed (byte* dataPtr = imageResult.Data)
+            {
+                _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba, (uint)imageResult.Width, (uint)imageResult.Height, 0, Silk.NET.OpenGL.PixelFormat.Rgba, PixelType.UnsignedByte, dataPtr);
+            }
+            
+            _gl.TexParameterI(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Linear);
+            _gl.TexParameterI(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Linear);
+            _gl.TexParameterI(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
+            _gl.TexParameterI(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
+            
+            _gl.BindTexture(TextureTarget.Texture2D, 0);
+            
+            Console.WriteLine("Bench texture loaded successfully");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to load bench texture: {ex.Message}");
+        }
     }
 
     private async Task TryFallbackFFmpegCommand(string frameDir, int framerate, string outputPath)
@@ -1338,6 +1476,59 @@ public class SimpleUIRenderer : IDisposable
         catch (Exception ex)
         {
             Console.WriteLine($"Error testing FFmpeg: {ex.Message}");
+        }
+    }
+
+    private void ShowProgressDialog()
+    {
+        if (_progressDialog == null)
+        {
+            var io = ImGui.GetIO();
+            var centerPos = new Vector2(io.DisplaySize.X * 0.5f - 200, io.DisplaySize.Y * 0.5f - 100);
+            
+            _progressDialog = new Dialog(
+                DialogType.RenderProgress,
+                "RENDER PROGRESS",
+                "",
+                centerPos,
+                () => { /* Complete - no action needed */ },
+                () => { _cancelAnimation = true; } // Cancel callback
+            );
+        }
+    }
+
+    private void HideProgressDialog()
+    {
+        _progressDialog = null;
+        _cancelAnimation = false;
+    }
+
+    private void ParseFFmpegProgress(string line, int totalFrames)
+    {
+        try
+        {
+            // FFmpeg outputs progress like "frame= 123 fps=30 q=28.0 size= 1024kB time=00:00:04.10 bitrate=2048.0kbits/s speed=1.0x"
+            if (line.Contains("frame="))
+            {
+                var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                foreach (var part in parts)
+                {
+                    if (part.StartsWith("frame="))
+                    {
+                        var frameStr = part.Substring(6);
+                        if (int.TryParse(frameStr, out int currentFrame))
+                        {
+                            float progress = totalFrames > 0 ? (float)currentFrame / totalFrames * 100.0f : 0.0f;
+                            _progressDialog?.UpdateEncodingProgress(Math.Min(progress, 100.0f));
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Ignore parsing errors
         }
     }
 }
